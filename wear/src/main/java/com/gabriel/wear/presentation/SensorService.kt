@@ -24,7 +24,6 @@ class SensorService : Service(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
     private val dataClient by lazy { Wearable.getDataClient(this) }
-
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
@@ -37,6 +36,8 @@ class SensorService : Service(), SensorEventListener {
 
     override fun onCreate() {
         super.onCreate()
+        // MUDANÇA: Adicionando log no início do onCreate
+        Log.d(TAG, "onCreate: Serviço está sendo criado.")
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
@@ -50,6 +51,8 @@ class SensorService : Service(), SensorEventListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // MUDANÇA: Adicionando log no início do onStartCommand
+        Log.d(TAG, "onStartCommand: Recebido comando com ação: ${intent?.action}")
         when (intent?.action) {
             ACTION_START -> startForegroundService()
             ACTION_STOP -> stopForegroundService()
@@ -58,28 +61,25 @@ class SensorService : Service(), SensorEventListener {
     }
 
     private fun startForegroundService() {
+        Log.d(TAG, "startForegroundService: Iniciando serviço em primeiro plano.")
         val notification: Notification = Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Monitoramento Ativo")
             .setContentText("Coletando dados do acelerômetro.")
             .setSmallIcon(R.mipmap.ic_launcher)
             .build()
-
         startForeground(NOTIFICATION_ID, notification)
-
         accelerometer?.also {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-            // MUDANÇA: Atualiza o estado para 'monitorando'
             MonitoringStateHolder.isMonitoring.value = true
             Log.d(TAG, "Listener do acelerômetro registrado. Estado: monitorando")
         }
     }
 
     private fun stopForegroundService() {
+        Log.d(TAG, "stopForegroundService: Parando serviço.")
         sensorManager.unregisterListener(this)
-        // MUDANÇA: Atualiza o estado para 'parado'
         MonitoringStateHolder.isMonitoring.value = false
         Log.d(TAG, "Listener do acelerômetro cancelado. Estado: parado")
-
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -88,7 +88,6 @@ class SensorService : Service(), SensorEventListener {
         if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER) {
             val sensorValues = event.values.clone()
             val timestamp = event.timestamp
-
             serviceScope.launch {
                 sendSensorData(timestamp, sensorValues)
             }
@@ -102,25 +101,21 @@ class SensorService : Service(), SensorEventListener {
                 dataMap.putFloatArray(DataLayerConstants.KEY_VALUES, values)
             }
             val putDataRequest = putDataMapRequest.asPutDataRequest().setUrgent()
-
             dataClient.putDataItem(putDataRequest).await()
-            Log.d(TAG, "Dados do sensor enviados: timestamp=$timestamp")
+            // Log.d(TAG, "Dados do sensor enviados: timestamp=$timestamp") // Desabilitado para não poluir o log
         } catch (e: Exception) {
             Log.e(TAG, "Falha ao enviar dados do sensor", e)
         }
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // Não é necessário implementar
-    }
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.d(TAG, "onDestroy: Serviço está sendo destruído.")
         serviceScope.cancel()
-        // MUDANÇA: Garante que o estado seja 'parado' se o serviço for destruído
         MonitoringStateHolder.isMonitoring.value = false
         sensorManager.unregisterListener(this)
-        Log.d(TAG, "SensorService destruído.")
     }
 
     override fun onBind(intent: Intent?): IBinder? {
