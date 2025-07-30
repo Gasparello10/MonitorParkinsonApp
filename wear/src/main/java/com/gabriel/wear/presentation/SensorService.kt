@@ -12,7 +12,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.IBinder
 import android.util.Log
-import com.gabriel.shared.DataLayerConstants
+import androidx.core.app.NotificationCompat
+import com.gabriel.wear.data.DataLayerConstants // Importa do novo arquivo de constantes
 import com.gabriel.wear.R
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
@@ -36,23 +37,20 @@ class SensorService : Service(), SensorEventListener {
 
     override fun onCreate() {
         super.onCreate()
-        // MUDANÇA: Adicionando log no início do onCreate
-        Log.d(TAG, "onCreate: Serviço está sendo criado.")
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
+        // Cria o canal de notificação uma vez quando o serviço é criado
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
             "Coleta de Dados do Sensor",
-            NotificationManager.IMPORTANCE_DEFAULT
+            NotificationManager.IMPORTANCE_LOW // Usar LOW para não fazer som
         )
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(channel)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // MUDANÇA: Adicionando log no início do onStartCommand
-        Log.d(TAG, "onStartCommand: Recebido comando com ação: ${intent?.action}")
         when (intent?.action) {
             ACTION_START -> startForegroundService()
             ACTION_STOP -> stopForegroundService()
@@ -61,26 +59,23 @@ class SensorService : Service(), SensorEventListener {
     }
 
     private fun startForegroundService() {
-        Log.d(TAG, "startForegroundService: Iniciando serviço em primeiro plano.")
-        val notification: Notification = Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+        val notification: Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Monitoramento Ativo")
             .setContentText("Coletando dados do acelerômetro.")
             .setSmallIcon(R.mipmap.ic_launcher)
             .build()
         startForeground(NOTIFICATION_ID, notification)
+
         accelerometer?.also {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-            MonitoringStateHolder.isMonitoring.value = true
-            Log.d(TAG, "Listener do acelerômetro registrado. Estado: monitorando")
+            Log.d(TAG, "Listener do acelerômetro registrado.")
         }
     }
 
     private fun stopForegroundService() {
-        Log.d(TAG, "stopForegroundService: Parando serviço.")
         sensorManager.unregisterListener(this)
-        MonitoringStateHolder.isMonitoring.value = false
-        Log.d(TAG, "Listener do acelerômetro cancelado. Estado: parado")
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        Log.d(TAG, "Listener do acelerômetro cancelado.")
+        stopForeground(true) // true é equivalente a STOP_FOREGROUND_REMOVE
         stopSelf()
     }
 
@@ -102,23 +97,24 @@ class SensorService : Service(), SensorEventListener {
             }
             val putDataRequest = putDataMapRequest.asPutDataRequest().setUrgent()
             dataClient.putDataItem(putDataRequest).await()
-            // Log.d(TAG, "Dados do sensor enviados: timestamp=$timestamp") // Desabilitado para não poluir o log
+            Log.d(TAG, "Dados do sensor enviados: timestamp=$timestamp")
         } catch (e: Exception) {
             Log.e(TAG, "Falha ao enviar dados do sensor", e)
         }
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        // Não precisamos implementar nada aqui para este caso de uso.
+    }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "onDestroy: Serviço está sendo destruído.")
-        serviceScope.cancel()
-        MonitoringStateHolder.isMonitoring.value = false
+        serviceScope.cancel() // Cancela todas as coroutines quando o serviço é destruído
         sensorManager.unregisterListener(this)
+        Log.d(TAG, "SensorService destruído.")
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        return null
+        return null // Não fornecemos binding para este serviço
     }
 }

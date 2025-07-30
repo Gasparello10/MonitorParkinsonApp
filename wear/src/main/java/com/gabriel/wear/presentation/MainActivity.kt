@@ -4,24 +4,12 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -29,31 +17,28 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.ButtonDefaults
-import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.Scaffold
-import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.TimeText
+import androidx.wear.compose.material.*
 import com.gabriel.wear.presentation.theme.MonitorParkinsonAppTheme
+import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MonitorParkinsonAppTheme { // This is a @Composable function
+            MonitorParkinsonAppTheme {
                 WearAppRoot()
             }
         }
     }
 }
 
-
 @Composable
 private fun WearAppRoot() {
-    val context =   LocalContext.current
+    val context = LocalContext.current
+
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -62,17 +47,34 @@ private fun WearAppRoot() {
         )
     }
 
+    // MUDANÇA: Adiciona estado para a conexão
+    var isConnected by remember { mutableStateOf(false) }
+    val nodeClient = Wearable.getNodeClient(context)
+
+    // MUDANÇA: Efeito que verifica a conexão a cada 5 segundos
+    LaunchedEffect(Unit) {
+        while (true) {
+            try {
+                val nodes = nodeClient.connectedNodes.await()
+                isConnected = nodes.isNotEmpty()
+            } catch (e: Exception) {
+                isConnected = false
+            }
+            delay(5000) // Espera 5 segundos
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { isGranted -> hasPermission = isGranted }
     )
 
     Scaffold(
-        modifier = Modifier.fillMaxSize(), // Apply fillMaxSize to Scaffold
         timeText = { TimeText(modifier = Modifier.padding(top = 8.dp)) }
     ) {
         if (hasPermission) {
-            ControlScreen()
+            // MUDANÇA: Passa o status da conexão para a tela de controle
+            ControlScreen(isConnected = isConnected)
         } else {
             RequestPermissionScreen(
                 onRequestPermission = { permissionLauncher.launch(Manifest.permission.BODY_SENSORS) }
@@ -82,49 +84,60 @@ private fun WearAppRoot() {
 }
 
 @Composable
-fun ControlScreen() {
+fun ControlScreen(isConnected: Boolean) { // MUDANÇA: Recebe o status da conexão
     val context = LocalContext.current
-    val isMonitoring by MonitoringStateHolder.isMonitoring.collectAsState()
+    var isServiceRunning by remember { mutableStateOf(false) }
 
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        item { Text("Monitoramento", style = MaterialTheme.typography.title3) }
-        item {
-            Text(
-                text = if (isMonitoring) "Status: Enviando dados..." else "Status: Parado",
-                color = if (isMonitoring) Color.Green else Color.White
-            )
-        }
-        item {
-            Button(
-                onClick = {
-                    Log.d("MainActivity", "Botão INICIAR clicado.")
-                    Intent(context, SensorService::class.java).also {
-                        it.action = SensorService.ACTION_START
-                        ContextCompat.startForegroundService(context, it)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-                enabled = !isMonitoring
-            ) { Text("Iniciar") }
-        }
-        item {
-            Button(
-                onClick = {
-                    Log.d("MainActivity", "Botão PARAR clicado.")
-                    Intent(context, SensorService::class.java).also {
-                        it.action = SensorService.ACTION_STOP
-                        context.startService(it)
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.error),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-                enabled = isMonitoring
-            ) { Text("Parar") }
-        }
+        Text(
+            text = "Monitoramento",
+            style = MaterialTheme.typography.title3,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // MUDANÇA: Adiciona os textos de status
+        Text(
+            text = if (isConnected) "Conectado" else "Desconectado",
+            color = if (isConnected) Color.Green else Color.Red,
+            style = MaterialTheme.typography.caption1
+        )
+        Text(
+            text = if (isServiceRunning) "Status: Coletando" else "Status: Parado",
+            style = MaterialTheme.typography.caption2
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = {
+                Intent(context, SensorService::class.java).also {
+                    it.action = SensorService.ACTION_START
+                    context.startService(it)
+                }
+                isServiceRunning = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isServiceRunning
+        ) { Text("Iniciar") }
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(
+            onClick = {
+                Intent(context, SensorService::class.java).also {
+                    it.action = SensorService.ACTION_STOP
+                    context.startService(it)
+                }
+                isServiceRunning = false
+            },
+            colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.error),
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isServiceRunning
+        ) { Text("Parar") }
     }
 }
 
