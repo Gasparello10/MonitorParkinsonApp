@@ -2,7 +2,9 @@ package com.gabriel.mobile.presentation
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.gabriel.mobile.ui.theme.MonitorParkinsonAppTheme
@@ -23,6 +26,9 @@ import com.patrykandpatrick.vico.compose.chart.line.lineChart
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : ComponentActivity() {
 
@@ -36,6 +42,40 @@ class MainActivity : ComponentActivity() {
                 val dataPoints by viewModel.sensorDataPoints.collectAsState()
                 val isConnected by viewModel.isConnected.collectAsState()
 
+                // MUDANÇA: Launcher para salvar o arquivo
+                val context = LocalContext.current
+                val fileSaverLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.CreateDocument("text/csv"),
+                    onResult = { uri ->
+                        uri?.let {
+                            context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                                // O conteúdo CSV será escrito aqui
+                            }
+                        }
+                    }
+                )
+
+                // MUDANÇA: Ouve os eventos de exportação do ViewModel
+                LaunchedEffect(Unit) {
+                    viewModel.exportCsvEvent.collectLatest { csvContent ->
+                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                        val fileName = "parkinson_data_$timestamp.csv"
+                        fileSaverLauncher.launch(fileName)
+
+                        // Re-lança o launcher com o conteúdo para ser escrito no callback
+                        val newFileSaver = registerForActivityResult(
+                            ActivityResultContracts.CreateDocument("text/csv")
+                        ) { uri ->
+                            uri?.let {
+                                context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                                    outputStream.write(csvContent.toByteArray())
+                                }
+                            }
+                        }
+                        newFileSaver.launch(fileName)
+                    }
+                }
+
                 LaunchedEffect(Unit) {
                     while (true) {
                         viewModel.checkConnection()
@@ -47,7 +87,8 @@ class MainActivity : ComponentActivity() {
                     status = status,
                     dataPoints = dataPoints,
                     isConnected = isConnected,
-                    onPingClicked = { viewModel.sendPingToWatch() }
+                    onPingClicked = { viewModel.sendPingToWatch() },
+                    onExportClicked = { viewModel.exportDataToCsv() } // MUDANÇA
                 )
             }
         }
@@ -59,7 +100,8 @@ fun MainScreen(
     status: String,
     dataPoints: List<SensorDataPoint>,
     isConnected: Boolean,
-    onPingClicked: () -> Unit
+    onPingClicked: () -> Unit,
+    onExportClicked: () -> Unit // MUDANÇA
 ) {
     var selectedTabIndex by remember { mutableStateOf(0) }
     val tabs = listOf("Dados", "Gráfico")
@@ -67,7 +109,7 @@ fun MainScreen(
     Scaffold(
         topBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                TopBarContent(status, isConnected, onPingClicked)
+                TopBarContent(status, isConnected, onPingClicked, onExportClicked) // MUDANÇA
                 TabRow(selectedTabIndex = selectedTabIndex) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
@@ -90,30 +132,34 @@ fun MainScreen(
 }
 
 @Composable
-fun TopBarContent(status: String, isConnected: Boolean, onPingClicked: () -> Unit) {
+fun TopBarContent(
+    status: String,
+    isConnected: Boolean,
+    onPingClicked: () -> Unit,
+    onExportClicked: () -> Unit // MUDANÇA
+) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
             text = "Monitor de Parkinson",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
-        Text(
-            text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (isConnected) Color(0xFF4CAF50) else Color.Red
-        )
-        Text(
-            text = "Status: $status",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary
-        )
+        // ... (Textos de status existentes)
         Spacer(modifier = Modifier.height(8.dp))
-        Button(onClick = onPingClicked) {
-            Text("Ping Relógio")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onPingClicked) {
+                Text("Ping Relógio")
+            }
+            // MUDANÇA: Novo botão de exportação
+            Button(onClick = onExportClicked) {
+                Text("Exportar CSV")
+            }
         }
     }
 }
 
+// ... (O resto dos seus Composables: DataListScreen, RealTimeChartScreen, DataPointCard)
+// Nenhuma mudança necessária neles.
 @Composable
 fun DataListScreen(dataPoints: List<SensorDataPoint>) {
     if (dataPoints.isEmpty()) {
@@ -139,16 +185,18 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
 
     // Este LaunchedEffect atualiza o gráfico sempre que novos dados chegam.
     LaunchedEffect(dataPoints) {
-        val xData = dataPoints.mapIndexed { index, _ -> index.toFloat() }
-        val yDataX = dataPoints.map { it.values[0] }
-        val yDataY = dataPoints.map { it.values[1] }
-        val yDataZ = dataPoints.map { it.values[2] }
+        if (dataPoints.isNotEmpty()) {
+            val xData = dataPoints.mapIndexed { index, _ -> index.toFloat() }
+            val yDataX = dataPoints.map { it.values[0] }
+            val yDataY = dataPoints.map { it.values[1] }
+            val yDataZ = dataPoints.map { it.values[2] }
 
-        modelProducer.setEntries(
-            xData.zip(yDataX, ::FloatEntry), // Eixo X
-            xData.zip(yDataY, ::FloatEntry), // Eixo Y
-            xData.zip(yDataZ, ::FloatEntry)  // Eixo Z
-        )
+            modelProducer.setEntries(
+                xData.zip(yDataX, ::FloatEntry), // Eixo X
+                xData.zip(yDataY, ::FloatEntry), // Eixo Y
+                xData.zip(yDataZ, ::FloatEntry)  // Eixo Z
+            )
+        }
     }
 
     if (dataPoints.isEmpty()) {
@@ -187,3 +235,4 @@ fun DataPointCard(dataPoint: SensorDataPoint) {
         }
     }
 }
+
