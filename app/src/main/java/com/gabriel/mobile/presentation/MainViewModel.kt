@@ -31,9 +31,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
     val sensorDataPoints = _sensorDataPoints.asStateFlow()
 
+    // MUDANÇA: Define o número máximo de pontos de dados a serem mantidos na memória.
+    private val maxDataPoints = 100
+
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            // CORREÇÃO: Recebe um objeto Serializable, não uma String.
             val dataPoint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA, SensorDataPoint::class.java)
             } else {
@@ -42,8 +44,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             dataPoint?.let {
-                _status.value = "Dados recebidos!"
-                _sensorDataPoints.value = _sensorDataPoints.value + it
+                _status.value = "Recebendo dados..."
+                // MUDANÇA: Lógica para adicionar e limitar o número de pontos.
+                val currentList = _sensorDataPoints.value.toMutableList()
+                currentList.add(it)
+                if (currentList.size > maxDataPoints) {
+                    _sensorDataPoints.value = currentList.takeLast(maxDataPoints)
+                } else {
+                    _sensorDataPoints.value = currentList
+                }
             }
         }
     }
