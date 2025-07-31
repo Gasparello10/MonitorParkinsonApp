@@ -2,10 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Adicionando permissão para evitar problemas de visibilidade de pacotes no Android 11+ -->
-    <queries>
-        <package android:name="com.google.android.wearable.app" />
-    </queries>
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
 
     <application
         android:allowBackup="true"
@@ -17,33 +18,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MonitorParkinsonApp"
         tools:targetApi="31">
-
-        <!--
-        ======================================================================
-        || INÍCIO DA DECLARAÇÃO DO SERVIÇO - A SEÇÃO ABAIXO FOI ADICIONADA   ||
-        ======================================================================
-        -->
-        <service
-            android:name=".service.DataLayerListenerService"
-            android:exported="true">
-            <intent-filter>
-                <!-- O listener para DADOS -->
-                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
-                <!-- O listener para MENSAGENS (usaremos no futuro para comandos) -->
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-
-                <!-- Especifica que o listener aceita dados de qualquer host (*) -->
-                <data
-                    android:host="*"
-                    android:scheme="wear" />
-            </intent-filter>
-        </service>
-        <!--
-        ======================================================================
-        || FIM DA DECLARAÇÃO DO SERVIÇO                                       ||
-        ======================================================================
-        -->
-
         <activity
             android:name=".presentation.MainActivity"
             android:exported="true"
@@ -54,6 +28,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+         MUDANÇA CRÍTICA: A action foi alterada para DATA_CHANGED.
+         Agora o serviço vai ouvir os DataItems que o relógio está enviando.
+        -->
+        <service
+            android:name=".service.DataLayerListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/" />
+            </intent-filter>
+        </service>
+
     </application>
 
 </manifest>

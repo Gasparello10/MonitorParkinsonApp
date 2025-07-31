@@ -12,7 +12,10 @@ import com.google.android.gms.wearable.WearableListenerService
 
 class DataLayerListenerService : WearableListenerService() {
 
-    // CORREÇÃO: Usamos onDataChanged para ouvir DataItems, não onMessageReceived.
+    override fun onCreate() {
+        super.onCreate()
+
+    }
     override fun onDataChanged(dataEvents: DataEventBuffer) {
         super.onDataChanged(dataEvents)
 
