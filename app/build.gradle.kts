@@ -47,6 +47,7 @@ dependencies {
     implementation("com.patrykandpatrick.vico:compose-m3:1.14.0")
     implementation("com.patrykandpatrick.vico:core:1.14.0")
     implementation("com.patrykandpatrick.vico:compose:1.14.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.play.services.wearable)

@@ -15,10 +15,10 @@
       </SelectionState>
       <SelectionState runConfigName="MonitorParkinsonApp.wear">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2025-07-31T01:52:08.801826Z">
+        <DropdownSelection timestamp="2025-07-31T14:19:16.880450600Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="PhysicalDevice" identifier="serial=RXAT4017VKF" />
+              <DeviceId pluginId="Default" identifier="serial=192.168.0.3:42739;connection=732ad482" />
             </handle>
           </Target>
         </DropdownSelection>

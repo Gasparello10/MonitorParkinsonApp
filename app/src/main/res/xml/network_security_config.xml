@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Permite tráfego HTTP (não criptografado) para domínios de desenvolvimento -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!--
+         Permite a conexão com qualquer endereço na rede local.
+         É seguro para desenvolvimento, mas para produção,
+         você especificaria o domínio exato do seu servidor.
+        -->
+        <domain includeSubdomains="true">192.168.0.12</domain>
+        <!-- Adicione outros IPs de desenvolvimento aqui se necessário -->
+    </domain-config>
+
+    <!-- Mantém as configurações padrão de segurança para todos os outros domínios -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

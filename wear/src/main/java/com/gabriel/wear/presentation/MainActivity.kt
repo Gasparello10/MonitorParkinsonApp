@@ -81,7 +81,7 @@ private fun WearAppRoot() {
                     }
                     Log.d("WearAppRoot", "Conectado ao(s) nó(s): $nodeInfo")
                 } else {
-                    Log.d("WearAppRoot", "Nenhum nó próximo conectado.")
+                    Log.d("WearAppRoot", "Nenhum nó conectado.")
                 }
 
             } catch (e: Exception) {

@@ -14,6 +14,7 @@ import com.gabriel.mobile.service.DataLayerListenerService
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -21,12 +22,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val messageClient by lazy { Wearable.getMessageClient(application) }
     private val nodeClient by lazy { Wearable.getNodeClient(application) }
+
+    // --- Lógica de Rede Adicionada ---
+    private val networkClient = OkHttpClient()
+    // IMPORTANTE: Lembre-se de substituir este IP pelo do seu computador!
+    private val serverUrl = "http://192.168.0.12:5000/data"
+    // --- Fim da Lógica de Rede ---
 
     private val _status = MutableStateFlow("Aguardando dados...")
     val status = _status.asStateFlow()
@@ -41,8 +53,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val exportCsvEvent = _exportCsvEvent.asSharedFlow()
 
     private val maxDataPoints = 100
-
-    // MUDANÇA: Job para controlar o timeout do status
     private var statusUpdateJob: Job? = null
 
     private val sensorDataReceiver = object : BroadcastReceiver() {
@@ -55,21 +65,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             dataPoint?.let {
-                // MUDANÇA: Lógica de status com timeout
-                statusUpdateJob?.cancel() // Cancela o timer anterior
-                _status.value = "Recebendo dados..." // Define o status como ativo
+                statusUpdateJob?.cancel()
+                _status.value = "Recebendo dados..."
 
                 val currentList = _sensorDataPoints.value.toMutableList()
                 currentList.add(it)
-                if (currentList.size > maxDataPoints) {
-                    _sensorDataPoints.value = currentList.takeLast(maxDataPoints)
+                _sensorDataPoints.value = if (currentList.size > maxDataPoints) {
+                    currentList.takeLast(maxDataPoints)
                 } else {
-                    _sensorDataPoints.value = currentList
+                    currentList
                 }
 
-                // Inicia um novo timer. Se ele terminar, o status muda para "Parado".
+                // --- Lógica de Rede Adicionada ---
+                // Envia o novo dado para o servidor Python
+                sendDataToServer(it)
+                // --- Fim da Lógica de Rede ---
+
                 statusUpdateJob = viewModelScope.launch {
-                    delay(3000L) // Espera 3 segundos
+                    delay(3000L)
                     _status.value = "Parado"
                 }
             }
@@ -82,6 +95,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         checkConnection()
     }
 
+    // --- Lógica de Rede Adicionada ---
+    private fun sendDataToServer(dataPoint: SensorDataPoint) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val jsonObject = JSONObject().apply {
+                    put("timestamp", dataPoint.timestamp)
+                    put("x", dataPoint.values[0])
+                    put("y", dataPoint.values[1])
+                    put("z", dataPoint.values[2])
+                }
+
+                val requestBody = jsonObject.toString()
+                    .toRequestBody("application/json; charset=utf-8".toMediaType())
+
+                val request = Request.Builder()
+                    .url(serverUrl)
+                    .post(requestBody)
+                    .build()
+
+                networkClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.d("MainViewModel", "Dado enviado com sucesso para o servidor.")
+                    } else {
+                        Log.e("MainViewModel", "Falha ao enviar dado: ${response.code} - ${response.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Erro de rede ao enviar dado", e)
+            }
+        }
+    }
+    // --- Fim da Lógica de Rede ---
+
     fun checkConnection() {
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
             val nearbyNodes = nodes.filter { it.isNearby }
@@ -89,9 +135,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             if (nearbyNodes.isNotEmpty()) {
                 val nodeInfo = nearbyNodes.joinToString(", ") { node -> "${node.displayName} (ID: ${node.id})" }
-                Log.d("MainViewModel", "Nós conectados encontrados: $nodeInfo")
+                Log.d("MainViewModel", "Conectado ao(s) nó(s): $nodeInfo")
             } else {
-                Log.d("MainViewModel", "Nenhum nó conectado encontrado.")
+                Log.d("MainViewModel", "Nenhum nó conectado.")
             }
         }.addOnFailureListener { e ->
             _isConnected.value = false
@@ -129,7 +175,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        statusUpdateJob?.cancel() // Garante que o job seja cancelado ao sair
+        statusUpdateJob?.cancel()
         LocalBroadcastManager.getInstance(getApplication()).unregisterReceiver(sensorDataReceiver)
     }
 }
