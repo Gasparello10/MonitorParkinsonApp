@@ -9,7 +9,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.gabriel.mobile"
+        applicationId = "com.gabriel.monitorparkinson"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
