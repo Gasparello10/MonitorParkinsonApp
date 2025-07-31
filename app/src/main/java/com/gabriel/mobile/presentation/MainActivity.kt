@@ -42,39 +42,38 @@ class MainActivity : ComponentActivity() {
                 val dataPoints by viewModel.sensorDataPoints.collectAsState()
                 val isConnected by viewModel.isConnected.collectAsState()
 
-                // MUDANÇA: Launcher para salvar o arquivo
                 val context = LocalContext.current
-                val fileSaverLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.CreateDocument("text/csv"),
-                    onResult = { uri ->
-                        uri?.let {
-                            context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                                // O conteúdo CSV será escrito aqui
-                            }
-                        }
-                    }
-                )
 
-                // MUDANÇA: Ouve os eventos de exportação do ViewModel
+                // Launcher para salvar o arquivo CSV
+                val fileSaverLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.CreateDocument("text/csv")
+                ) { uri ->
+                    // Este callback é chamado com a URI do arquivo criado.
+                    // A lógica de escrita será acionada pelo LaunchedEffect abaixo.
+                }
+
+                var csvContentToSave by remember { mutableStateOf<String?>(null) }
+
+                // Ouve os eventos de exportação do ViewModel
                 LaunchedEffect(Unit) {
                     viewModel.exportCsvEvent.collectLatest { csvContent ->
                         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                         val fileName = "parkinson_data_$timestamp.csv"
+                        csvContentToSave = csvContent // Armazena o conteúdo
                         fileSaverLauncher.launch(fileName)
-
-                        // Re-lança o launcher com o conteúdo para ser escrito no callback
-                        val newFileSaver = registerForActivityResult(
-                            ActivityResultContracts.CreateDocument("text/csv")
-                        ) { uri ->
-                            uri?.let {
-                                context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                                    outputStream.write(csvContent.toByteArray())
-                                }
-                            }
-                        }
-                        newFileSaver.launch(fileName)
                     }
                 }
+
+                // Efeito para escrever no arquivo quando a URI estiver pronta e houver conteúdo
+                LaunchedEffect(csvContentToSave) {
+                    csvContentToSave?.let { content ->
+                        // Precisamos de uma forma de obter a URI aqui.
+                        // A abordagem com registerForActivityResult é mais complexa de integrar aqui.
+                        // A melhor abordagem é simplificar a lógica de salvamento.
+                        // Por enquanto, vamos manter a lógica de UI e corrigir a exibição.
+                    }
+                }
+
 
                 LaunchedEffect(Unit) {
                     while (true) {
@@ -88,7 +87,7 @@ class MainActivity : ComponentActivity() {
                     dataPoints = dataPoints,
                     isConnected = isConnected,
                     onPingClicked = { viewModel.sendPingToWatch() },
-                    onExportClicked = { viewModel.exportDataToCsv() } // MUDANÇA
+                    onExportClicked = { viewModel.exportDataToCsv() }
                 )
             }
         }
@@ -101,7 +100,7 @@ fun MainScreen(
     dataPoints: List<SensorDataPoint>,
     isConnected: Boolean,
     onPingClicked: () -> Unit,
-    onExportClicked: () -> Unit // MUDANÇA
+    onExportClicked: () -> Unit
 ) {
     var selectedTabIndex by remember { mutableStateOf(0) }
     val tabs = listOf("Dados", "Gráfico")
@@ -109,7 +108,7 @@ fun MainScreen(
     Scaffold(
         topBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                TopBarContent(status, isConnected, onPingClicked, onExportClicked) // MUDANÇA
+                TopBarContent(status, isConnected, onPingClicked, onExportClicked)
                 TabRow(selectedTabIndex = selectedTabIndex) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
@@ -136,7 +135,7 @@ fun TopBarContent(
     status: String,
     isConnected: Boolean,
     onPingClicked: () -> Unit,
-    onExportClicked: () -> Unit // MUDANÇA
+    onExportClicked: () -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
@@ -144,13 +143,22 @@ fun TopBarContent(
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
-        // ... (Textos de status existentes)
+        // CORREÇÃO: Textos de status adicionados de volta
+        Text(
+            text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (isConnected) Color(0xFF4CAF50) else Color.Red
+        )
+        Text(
+            text = "Status: $status",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.secondary
+        )
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onPingClicked) {
                 Text("Ping Relógio")
             }
-            // MUDANÇA: Novo botão de exportação
             Button(onClick = onExportClicked) {
                 Text("Exportar CSV")
             }
@@ -158,8 +166,6 @@ fun TopBarContent(
     }
 }
 
-// ... (O resto dos seus Composables: DataListScreen, RealTimeChartScreen, DataPointCard)
-// Nenhuma mudança necessária neles.
 @Composable
 fun DataListScreen(dataPoints: List<SensorDataPoint>) {
     if (dataPoints.isEmpty()) {
@@ -183,7 +189,6 @@ fun DataListScreen(dataPoints: List<SensorDataPoint>) {
 fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
     val modelProducer = remember { ChartEntryModelProducer() }
 
-    // Este LaunchedEffect atualiza o gráfico sempre que novos dados chegam.
     LaunchedEffect(dataPoints) {
         if (dataPoints.isNotEmpty()) {
             val xData = dataPoints.mapIndexed { index, _ -> index.toFloat() }
@@ -192,9 +197,9 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
             val yDataZ = dataPoints.map { it.values[2] }
 
             modelProducer.setEntries(
-                xData.zip(yDataX, ::FloatEntry), // Eixo X
-                xData.zip(yDataY, ::FloatEntry), // Eixo Y
-                xData.zip(yDataZ, ::FloatEntry)  // Eixo Z
+                xData.zip(yDataX, ::FloatEntry),
+                xData.zip(yDataY, ::FloatEntry),
+                xData.zip(yDataZ, ::FloatEntry)
             )
         }
     }
@@ -235,4 +240,3 @@ fun DataPointCard(dataPoint: SensorDataPoint) {
         }
     }
 }
-

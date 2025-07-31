@@ -13,11 +13,15 @@ import android.hardware.SensorManager
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.gabriel.shared.DataLayerConstants // CORREÇÃO: Importa do módulo 'shared'
+import com.gabriel.shared.DataLayerConstants
 import com.gabriel.wear.R
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 class SensorService : Service(), SensorEventListener {

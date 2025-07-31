@@ -35,7 +35,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
     val sensorDataPoints = _sensorDataPoints.asStateFlow()
 
-    // MUDANÇA: Adiciona um fluxo de eventos para a ação de exportar
     private val _exportCsvEvent = MutableSharedFlow<String>()
     val exportCsvEvent = _exportCsvEvent.asSharedFlow()
 
@@ -69,7 +68,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         checkConnection()
     }
 
-    // MUDANÇA: Nova função para criar o conteúdo CSV e emitir o evento
+    fun checkConnection() {
+        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
+            // CORREÇÃO: Usamos 'isNearby' para uma verificação de conexão mais confiável.
+            val nearbyNodes = nodes.filter { it.isNearby }
+            _isConnected.value = nearbyNodes.isNotEmpty()
+
+            if (nearbyNodes.isNotEmpty()) {
+                val nodeInfo = nearbyNodes.joinToString(", ") { node -> "${node.displayName} (ID: ${node.id})" }
+                Log.d("MainViewModel", "Nós conectados encontrados: $nodeInfo")
+            } else {
+                Log.d("MainViewModel", "Nenhum nó conectado encontrado.")
+            }
+        }.addOnFailureListener { e ->
+            _isConnected.value = false
+            Log.e("MainViewModel", "Falha ao verificar nós conectados", e)
+        }
+    }
+
     fun exportDataToCsv() {
         viewModelScope.launch {
             val data = _sensorDataPoints.value
@@ -79,24 +95,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val stringBuilder = StringBuilder()
-            // Adiciona o cabeçalho do CSV
             stringBuilder.append("timestamp,x,y,z\n")
-            // Adiciona cada ponto de dado em uma nova linha
             data.forEach { dataPoint ->
                 val line = "${dataPoint.timestamp},${dataPoint.values[0]},${dataPoint.values[1]},${dataPoint.values[2]}\n"
                 stringBuilder.append(line)
             }
-            // Emite o evento com o conteúdo CSV pronto
             _exportCsvEvent.emit(stringBuilder.toString())
         }
     }
 
-    fun checkConnection() {
-        // ... (código existente)
-    }
-
     fun sendPingToWatch() {
-        // ... (código existente)
+        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
+            nodes.forEach { node ->
+                messageClient.sendMessage(node.id, DataLayerConstants.PING_PATH, "PING".toByteArray(StandardCharsets.UTF_8))
+                    .addOnSuccessListener { Log.d("MainViewModel", "Ping enviado para ${node.displayName}") }
+                    .addOnFailureListener { e -> Log.e("MainViewModel", "Falha ao enviar Ping", e) }
+            }
+        }
     }
 
     override fun onCleared() {
