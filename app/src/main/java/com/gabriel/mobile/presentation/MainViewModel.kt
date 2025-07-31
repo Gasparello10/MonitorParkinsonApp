@@ -14,6 +14,8 @@ import com.gabriel.mobile.service.DataLayerListenerService
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -40,6 +42,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val maxDataPoints = 100
 
+    // MUDANÇA: Job para controlar o timeout do status
+    private var statusUpdateJob: Job? = null
+
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val dataPoint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -50,13 +55,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             dataPoint?.let {
-                _status.value = "Recebendo dados..."
+                // MUDANÇA: Lógica de status com timeout
+                statusUpdateJob?.cancel() // Cancela o timer anterior
+                _status.value = "Recebendo dados..." // Define o status como ativo
+
                 val currentList = _sensorDataPoints.value.toMutableList()
                 currentList.add(it)
                 if (currentList.size > maxDataPoints) {
                     _sensorDataPoints.value = currentList.takeLast(maxDataPoints)
                 } else {
                     _sensorDataPoints.value = currentList
+                }
+
+                // Inicia um novo timer. Se ele terminar, o status muda para "Parado".
+                statusUpdateJob = viewModelScope.launch {
+                    delay(3000L) // Espera 3 segundos
+                    _status.value = "Parado"
                 }
             }
         }
@@ -70,7 +84,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkConnection() {
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
-            // CORREÇÃO: Usamos 'isNearby' para uma verificação de conexão mais confiável.
             val nearbyNodes = nodes.filter { it.isNearby }
             _isConnected.value = nearbyNodes.isNotEmpty()
 
@@ -116,6 +129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        statusUpdateJob?.cancel() // Garante que o job seja cancelado ao sair
         LocalBroadcastManager.getInstance(getApplication()).unregisterReceiver(sensorDataReceiver)
     }
 }
