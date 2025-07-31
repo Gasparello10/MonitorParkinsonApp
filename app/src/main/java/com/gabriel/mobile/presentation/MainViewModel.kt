@@ -1,62 +1,87 @@
 package com.gabriel.mobile.presentation
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import com.gabriel.mobile.data.SensorDataRepository
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.gabriel.mobile.service.DataLayerListenerService
+import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import java.nio.charset.StandardCharsets
 
-// MUDANÇA: Usamos AndroidViewModel para ter acesso ao contexto do aplicativo.
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val nodeClient by lazy { Wearable.getNodeClient(getApplication()) }
+    private val messageClient by lazy { Wearable.getMessageClient(application) }
+    private val nodeClient by lazy { Wearable.getNodeClient(application) }
 
-    // StateFlow para os dados do sensor
-    private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
-    val sensorDataPoints = _sensorDataPoints.asStateFlow()
-
-    // StateFlow para o status de recebimento de dados
     private val _status = MutableStateFlow("Aguardando dados...")
     val status = _status.asStateFlow()
 
-    // MUDANÇA: Novo StateFlow para o status da conexão
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
-    init {
-        // Verifica a conexão assim que o ViewModel é criado
-        checkConnection()
+    private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
+    val sensorDataPoints = _sensorDataPoints.asStateFlow()
 
-        // Coleta os dados do sensor vindos do repositório
-        viewModelScope.launch {
-            SensorDataRepository.sensorDataFlow.collect { dataPoint ->
-                _sensorDataPoints.value += dataPoint
-                _status.value = "Recebendo dados..."
+    private val sensorDataReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            // CORREÇÃO: Recebe um objeto Serializable, não uma String.
+            val dataPoint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA, SensorDataPoint::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA) as? SensorDataPoint
+            }
+
+            dataPoint?.let {
+                _status.value = "Dados recebidos!"
+                _sensorDataPoints.value = _sensorDataPoints.value + it
             }
         }
     }
 
-    // MUDANÇA: Nova função para verificar os nós conectados
+    init {
+        val intentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_SENSOR_DATA)
+        LocalBroadcastManager.getInstance(application).registerReceiver(sensorDataReceiver, intentFilter)
+        Log.d("MainViewModel", "BroadcastReceiver para dados do sensor registrado.")
+        checkConnection()
+    }
+
     fun checkConnection() {
-        viewModelScope.launch {
-            try {
-                val nodes = nodeClient.connectedNodes.await()
-                _isConnected.value = nodes.isNotEmpty()
-                if (nodes.isNotEmpty()) {
-                    Log.d("MainViewModel", "Nós conectados encontrados: ${nodes.size}")
-                } else {
-                    Log.d("MainViewModel", "Nenhum nó conectado encontrado.")
-                }
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Falha ao verificar conexão", e)
-                _isConnected.value = false
+        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
+            _isConnected.value = nodes.isNotEmpty()
+            if (nodes.isNotEmpty()) {
+                val nodeInfo = nodes.joinToString(", ") { node -> "${node.displayName} (ID: ${node.id})" }
+                Log.d("MainViewModel", "Nós conectados encontrados: $nodeInfo")
+            } else {
+                Log.d("MainViewModel", "Nenhum nó conectado encontrado.")
+            }
+        }.addOnFailureListener { e ->
+            _isConnected.value = false
+            Log.e("MainViewModel", "Falha ao verificar nós conectados", e)
+        }
+    }
+
+    fun sendPingToWatch() {
+        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
+            nodes.forEach { node ->
+                messageClient.sendMessage(node.id, DataLayerConstants.PING_PATH, "PING".toByteArray(StandardCharsets.UTF_8))
+                    .addOnSuccessListener { Log.d("MainViewModel", "Ping enviado para ${node.displayName}") }
+                    .addOnFailureListener { e -> Log.e("MainViewModel", "Falha ao enviar Ping", e) }
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        LocalBroadcastManager.getInstance(getApplication()).unregisterReceiver(sensorDataReceiver)
     }
 }

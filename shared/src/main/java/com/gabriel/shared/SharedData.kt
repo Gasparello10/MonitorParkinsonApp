@@ -1,16 +1,13 @@
 package com.gabriel.shared
 
-
-import com.google.android.gms.wearable.DataMap
 import java.io.Serializable
 
 /**
  * Objeto para armazenar constantes usadas na comunicação via Data Layer.
- * Usar um objeto compartilhado garante que o celular e o relógio
- * usem sempre as mesmas chaves e caminhos, evitando erros.
+ * Usado por ambos os módulos para garantir consistência.
  */
 object DataLayerConstants {
-    // Caminho para os eventos de início/parada da medição
+    // Caminho para os eventos de início/parada da medição (se necessário no futuro)
     const val CONTROL_PATH = "/control"
     const val START_COMMAND = "start"
     const val STOP_COMMAND = "stop"
@@ -21,11 +18,14 @@ object DataLayerConstants {
     // Chaves para os dados dentro de um DataMap
     const val KEY_TIMESTAMP = "timestamp"
     const val KEY_VALUES = "values" // Array de Floats (x, y, z)
+
+    // Caminho para as mensagens de "ping" do celular para o relógio
+    const val PING_PATH = "/ping"
 }
 
 /**
  * Modelo de dados para uma única leitura do sensor.
- * Implementa Serializable para que possa ser facilmente enviado.
+ * Implementa Serializable para que possa ser facilmente enviado entre módulos.
  *
  * @param timestamp O momento em que a leitura foi feita.
  * @param values Um array de 3 floats representando os eixos [x, y, z].
@@ -38,12 +38,9 @@ data class SensorDataPoint(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
-
         other as SensorDataPoint
-
         if (timestamp != other.timestamp) return false
         if (!values.contentEquals(other.values)) return false
-
         return true
     }
 

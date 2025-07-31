@@ -13,7 +13,7 @@ import android.hardware.SensorManager
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.gabriel.wear.data.DataLayerConstants // Importa do novo arquivo de constantes
+import com.gabriel.shared.DataLayerConstants // CORREÇÃO: Importa do módulo 'shared'
 import com.gabriel.wear.R
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
@@ -40,11 +40,10 @@ class SensorService : Service(), SensorEventListener {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
-        // Cria o canal de notificação uma vez quando o serviço é criado
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
             "Coleta de Dados do Sensor",
-            NotificationManager.IMPORTANCE_LOW // Usar LOW para não fazer som
+            NotificationManager.IMPORTANCE_LOW
         )
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(channel)
@@ -75,7 +74,7 @@ class SensorService : Service(), SensorEventListener {
     private fun stopForegroundService() {
         sensorManager.unregisterListener(this)
         Log.d(TAG, "Listener do acelerômetro cancelado.")
-        stopForeground(true) // true é equivalente a STOP_FOREGROUND_REMOVE
+        stopForeground(true)
         stopSelf()
     }
 
@@ -104,17 +103,17 @@ class SensorService : Service(), SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // Não precisamos implementar nada aqui para este caso de uso.
+        // Não é necessário para este caso de uso.
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        serviceScope.cancel() // Cancela todas as coroutines quando o serviço é destruído
+        serviceScope.cancel()
         sensorManager.unregisterListener(this)
         Log.d(TAG, "SensorService destruído.")
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        return null // Não fornecemos binding para este serviço
+        return null
     }
 }

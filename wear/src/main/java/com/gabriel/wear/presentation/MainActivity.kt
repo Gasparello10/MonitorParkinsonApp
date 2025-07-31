@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -47,18 +48,29 @@ private fun WearAppRoot() {
         )
     }
 
-    // MUDANÇA: Adiciona estado para a conexão
     var isConnected by remember { mutableStateOf(false) }
     val nodeClient = Wearable.getNodeClient(context)
 
-    // MUDANÇA: Efeito que verifica a conexão a cada 5 segundos
     LaunchedEffect(Unit) {
         while (true) {
             try {
                 val nodes = nodeClient.connectedNodes.await()
-                isConnected = nodes.isNotEmpty()
+                val nearbyNodes = nodes.filter { it.isNearby }
+                isConnected = nearbyNodes.isNotEmpty()
+
+                // MUDANÇA: Log aprimorado para mostrar os detalhes do nó conectado.
+                if (nearbyNodes.isNotEmpty()) {
+                    val nodeInfo = nearbyNodes.joinToString(", ") { node ->
+                        "${node.displayName} (ID: ${node.id})"
+                    }
+                    Log.d("WearAppRoot", "Conectado ao(s) nó(s): $nodeInfo")
+                } else {
+                    Log.d("WearAppRoot", "Nenhum nó próximo conectado.")
+                }
+
             } catch (e: Exception) {
                 isConnected = false
+                Log.e("WearAppRoot", "Falha ao verificar nós conectados", e)
             }
             delay(5000) // Espera 5 segundos
         }
@@ -73,7 +85,6 @@ private fun WearAppRoot() {
         timeText = { TimeText(modifier = Modifier.padding(top = 8.dp)) }
     ) {
         if (hasPermission) {
-            // MUDANÇA: Passa o status da conexão para a tela de controle
             ControlScreen(isConnected = isConnected)
         } else {
             RequestPermissionScreen(
@@ -84,7 +95,7 @@ private fun WearAppRoot() {
 }
 
 @Composable
-fun ControlScreen(isConnected: Boolean) { // MUDANÇA: Recebe o status da conexão
+fun ControlScreen(isConnected: Boolean) {
     val context = LocalContext.current
     var isServiceRunning by remember { mutableStateOf(false) }
 
@@ -102,7 +113,6 @@ fun ControlScreen(isConnected: Boolean) { // MUDANÇA: Recebe o status da conex�
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // MUDANÇA: Adiciona os textos de status
         Text(
             text = if (isConnected) "Conectado" else "Desconectado",
             color = if (isConnected) Color.Green else Color.Red,

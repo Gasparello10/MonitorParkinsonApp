@@ -42,6 +42,7 @@ android {
 dependencies {
 
     implementation(project(":shared"))
+    implementation (libs.androidx.localbroadcastmanager)
 
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.play.services.wearable)
