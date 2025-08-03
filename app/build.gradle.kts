@@ -18,15 +18,24 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // --- MUDANÇA INSERIDA AQUI ---
     buildTypes {
+        debug {
+            // Esta linha cria uma variável BuildConfig.SERVER_URL para a versão de debug
+            buildConfigField("String", "SERVER_URL", "\"http://172.20.10.5:5000\"")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Para o futuro, definir a URL do servidor de produção aqui
+            buildConfigField("String", "SERVER_URL", "\"https://seu-servidor-na-nuvem.com\"")
         }
     }
+    // --- FIM DA MUDANÇA ---
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -36,6 +45,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

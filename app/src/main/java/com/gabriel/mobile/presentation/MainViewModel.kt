@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.gabriel.mobile.BuildConfig
 import com.gabriel.mobile.service.DataLayerListenerService
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
@@ -36,8 +37,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Lógica de Rede Adicionada ---
     private val networkClient = OkHttpClient()
-    // IMPORTANTE: Lembre-se de substituir este IP pelo do seu computador!
-    private val serverUrl = "http://192.168.0.12:5000/data"
+    // IMPORTANTE: Substituir este IP pelo do seu computador!
+    private val serverUrl = "${BuildConfig.SERVER_URL}/data"
     // --- Fim da Lógica de Rede ---
 
     private val _status = MutableStateFlow("Aguardando dados...")
