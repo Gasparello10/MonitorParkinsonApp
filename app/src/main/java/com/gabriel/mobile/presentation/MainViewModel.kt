@@ -38,10 +38,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val networkClient = OkHttpClient()
     private val serverUrl = "${BuildConfig.SERVER_URL}/data"
 
-    // --- MUDANÇA: Lógica de Envio em Lotes ---
+    // Buffer para enviar dados em lote para o servidor
     private val dataBuffer = mutableListOf<SensorDataPoint>()
-    private val BATCH_SIZE = 25 // Envia a cada 25 amostras (0.5 segundos a 50Hz)
-    // --- Fim da Mudança ---
+    private val BATCH_SIZE = 25
 
     private val _status = MutableStateFlow("Aguardando dados...")
     val status = _status.asStateFlow()
@@ -55,8 +54,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _exportCsvEvent = MutableSharedFlow<String>()
     val exportCsvEvent = _exportCsvEvent.asSharedFlow()
 
-    private val maxDataPoints = 100
+    private val maxDataPointsForChart = 100
+    private val dataQueue = ArrayDeque<SensorDataPoint>(maxDataPointsForChart)
     private var statusUpdateJob: Job? = null
+
+    // --- MUDANÇA: Buffer para otimizar as atualizações da UI ---
+    private val uiUpdateBuffer = mutableListOf<SensorDataPoint>()
+    private val UI_UPDATE_BATCH_SIZE = 25 // Atualiza a UI a cada x amostras (10x por segundo a 50Hz)
+    // --- Fim da Mudança ---
 
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -71,20 +76,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 statusUpdateJob?.cancel()
                 _status.value = "Recebendo dados..."
 
-                val currentList = _sensorDataPoints.value.toMutableList()
-                currentList.add(it)
-                _sensorDataPoints.value = if (currentList.size > maxDataPoints) {
-                    currentList.takeLast(maxDataPoints)
-                } else {
-                    currentList
+                // Adiciona o ponto à fila de dados para o gráfico
+                synchronized(dataQueue) {
+                    if (dataQueue.size >= maxDataPointsForChart) {
+                        dataQueue.removeFirst()
+                    }
+                    dataQueue.addLast(it)
                 }
 
-                // --- MUDANÇA: Lógica de Envio em Lotes ---
+                // Adiciona o ponto ao buffer de envio para o servidor
                 synchronized(dataBuffer) {
                     dataBuffer.add(it)
                     if (dataBuffer.size >= BATCH_SIZE) {
-                        sendBatchToServer(ArrayList(dataBuffer)) // Envia uma cópia
-                        dataBuffer.clear() // Limpa o buffer
+                        sendBatchToServer(ArrayList(dataBuffer))
+                        dataBuffer.clear()
+                    }
+                }
+
+                // --- MUDANÇA: Lógica de atualização da UI em lotes ---
+                synchronized(uiUpdateBuffer) {
+                    uiUpdateBuffer.add(it)
+                    if (uiUpdateBuffer.size >= UI_UPDATE_BATCH_SIZE) {
+                        // Atingiu o tamanho do lote, atualiza a UI com a janela de dados mais recente
+                        _sensorDataPoints.value = dataQueue.toList()
+                        uiUpdateBuffer.clear() // Limpa o buffer para o próximo lote
                     }
                 }
                 // --- Fim da Mudança ---
@@ -103,11 +118,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         checkConnection()
     }
 
-    // --- MUDANÇA: Função atualizada para enviar um lote de dados ---
     private fun sendBatchToServer(batch: List<SensorDataPoint>) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Cria um array JSON a partir da lista de data points
                 val jsonArray = JSONArray()
                 batch.forEach { dataPoint ->
                     val jsonObject = JSONObject().apply {
@@ -128,10 +141,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .build()
 
                 networkClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        Log.d("MainViewModel", "${batch.size} dados enviados com sucesso para o servidor.")
-                    } else {
-                        Log.e("MainViewModel", "Falha ao enviar lote: ${response.code} - ${response.message}")
+                    if (!response.isSuccessful) {
+                        Log.e("MainViewModel", "Falha ao enviar lote: ${response.code}")
                     }
                 }
             } catch (e: Exception) {
@@ -139,7 +150,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    // --- Fim da Mudança ---
 
     fun checkConnection() {
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->

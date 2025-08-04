@@ -49,7 +49,6 @@ class MainActivity : ComponentActivity() {
                 val dataPoints by viewModel.sensorDataPoints.collectAsState()
                 val isConnected by viewModel.isConnected.collectAsState()
                 val context = LocalContext.current
-
                 var csvContentToSave by remember { mutableStateOf<String?>(null) }
 
                 val fileSaverLauncher = rememberLauncherForActivityResult(
@@ -138,29 +137,13 @@ fun TopBarContent(
     onExportClicked: () -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
-        Text(
-            text = "Monitor de Parkinson",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (isConnected) Color(0xFF4CAF50) else Color.Red
-        )
-        Text(
-            text = "Status: $status",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary
-        )
+        Text(text = "Monitor de Parkinson", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado", style = MaterialTheme.typography.bodyLarge, color = if (isConnected) Color(0xFF4CAF50) else Color.Red)
+        Text(text = "Status: $status", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onPingClicked) {
-                Text("Ping Relógio")
-            }
-            Button(onClick = onExportClicked) {
-                Text("Exportar CSV")
-            }
+            Button(onClick = onPingClicked) { Text("Ping Relógio") }
+            Button(onClick = onExportClicked) { Text("Exportar CSV") }
         }
     }
 }
@@ -172,18 +155,11 @@ fun DataListScreen(dataPoints: List<SensorDataPoint>) {
             Text("Nenhum dado recebido ainda.")
         }
     } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            reverseLayout = true
-        ) {
-            items(dataPoints) { dataPoint ->
-                DataPointCard(dataPoint = dataPoint)
-            }
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), reverseLayout = true) {
+            items(dataPoints) { dataPoint -> DataPointCard(dataPoint = dataPoint) }
         }
     }
 }
-
 
 @Composable
 fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
@@ -191,16 +167,12 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
 
     LaunchedEffect(dataPoints) {
         if (dataPoints.isNotEmpty()) {
-            val xData = dataPoints.mapIndexed { index, _ -> index.toFloat() }
-            val yDataX = dataPoints.map { it.values[0] }
-            val yDataY = dataPoints.map { it.values[1] }
-            val yDataZ = dataPoints.map { it.values[2] }
-
-            modelProducer.setEntries(
-                xData.zip(yDataX, ::FloatEntry),
-                xData.zip(yDataY, ::FloatEntry),
-                xData.zip(yDataZ, ::FloatEntry)
-            )
+            val windowedData = dataPoints.takeLast(100)
+            val xData = windowedData.mapIndexed { index, _ -> index.toFloat() }
+            val yDataX = windowedData.map { it.values[0] }
+            val yDataY = windowedData.map { it.values[1] }
+            val yDataZ = windowedData.map { it.values[2] }
+            modelProducer.setEntries(xData.zip(yDataX, ::FloatEntry), xData.zip(yDataY, ::FloatEntry), xData.zip(yDataZ, ::FloatEntry))
         }
     }
 
@@ -213,7 +185,9 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
         val colorY = Color.Green
         val colorZ = Color.Blue
 
+        // --- MUDANÇA: O Column e os botões de escala foram removidos ---
         Chart(
+            modifier = Modifier.fillMaxSize().padding(8.dp),
             chart = lineChart(
                 lines = listOf(
                     LineChart.LineSpec(lineColor = colorX.toArgb()),
@@ -224,29 +198,13 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
             chartModelProducer = modelProducer,
             startAxis = rememberStartAxis(),
             bottomAxis = rememberBottomAxis(),
-            modifier = Modifier.fillMaxSize().padding(16.dp),
             legend = verticalLegend(
                 items = listOf(
-                    LegendItem(
-                        icon = shapeComponent(Shapes.pillShape, colorX),
-                        // --- CORREÇÃO FINAL: 'label' para estilo, 'labelText' para o conteúdo ---
-                        label = textComponent(color = MaterialTheme.colorScheme.onSurface),
-                        labelText = "Eixo X"
-                    ),
-                    LegendItem(
-                        icon = shapeComponent(Shapes.pillShape, colorY),
-                        label = textComponent(color = MaterialTheme.colorScheme.onSurface),
-                        labelText = "Eixo Y"
-                    ),
-                    LegendItem(
-                        icon = shapeComponent(Shapes.pillShape, colorZ),
-                        label = textComponent(color = MaterialTheme.colorScheme.onSurface),
-                        labelText = "Eixo Z"
-                    )
+                    LegendItem(icon = shapeComponent(Shapes.pillShape, colorX), label = textComponent(color = MaterialTheme.colorScheme.onSurface), labelText = "Eixo X"),
+                    LegendItem(icon = shapeComponent(Shapes.pillShape, colorY), label = textComponent(color = MaterialTheme.colorScheme.onSurface), labelText = "Eixo Y"),
+                    LegendItem(icon = shapeComponent(Shapes.pillShape, colorZ), label = textComponent(color = MaterialTheme.colorScheme.onSurface), labelText = "Eixo Z")
                 ),
-                iconSize = 8.dp,
-                iconPadding = 8.dp,
-                spacing = 4.dp
+                iconSize = 8.dp, iconPadding = 8.dp, spacing = 4.dp
             )
         )
     }
@@ -254,20 +212,13 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
 
 @Composable
 fun DataPointCard(dataPoint: SensorDataPoint) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
+    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
             val (x, y, z) = dataPoint.values
             Text(text = "Eixo X: ${"%.3f".format(x)}")
             Text(text = "Eixo Y: ${"%.3f".format(y)}")
             Text(text = "Eixo Z: ${"%.3f".format(z)}")
-            Text(
-                text = "Timestamp: ${dataPoint.timestamp}",
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(top = 8.dp)
-            )
+            Text(text = "Timestamp: ${dataPoint.timestamp}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }
