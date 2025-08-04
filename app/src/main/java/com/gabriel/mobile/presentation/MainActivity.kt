@@ -6,36 +6,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,13 +24,18 @@ import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
 import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
 import com.patrykandpatrick.vico.compose.chart.Chart
 import com.patrykandpatrick.vico.compose.chart.line.lineChart
+import com.patrykandpatrick.vico.compose.component.shapeComponent
+import com.patrykandpatrick.vico.compose.component.textComponent
+import com.patrykandpatrick.vico.compose.legend.verticalLegend
+import com.patrykandpatrick.vico.core.chart.line.LineChart
+import com.patrykandpatrick.vico.core.component.shape.Shapes
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.FloatEntry
+import com.patrykandpatrick.vico.core.legend.LegendItem
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 class MainActivity : ComponentActivity() {
 
@@ -64,39 +48,32 @@ class MainActivity : ComponentActivity() {
                 val status by viewModel.status.collectAsState()
                 val dataPoints by viewModel.sensorDataPoints.collectAsState()
                 val isConnected by viewModel.isConnected.collectAsState()
-
                 val context = LocalContext.current
-
-                // Launcher para salvar o arquivo CSV
-                val fileSaverLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.CreateDocument("text/csv")
-                ) { uri ->
-                    // Este callback é chamado com a URI do arquivo criado.
-                    // A lógica de escrita será acionada pelo LaunchedEffect abaixo.
-                }
 
                 var csvContentToSave by remember { mutableStateOf<String?>(null) }
 
-                // Ouve os eventos de exportação do ViewModel
+                val fileSaverLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.CreateDocument("text/csv"),
+                    onResult = { uri ->
+                        uri?.let { fileUri ->
+                            csvContentToSave?.let { content ->
+                                context.contentResolver.openOutputStream(fileUri)?.use { outputStream ->
+                                    outputStream.write(content.toByteArray())
+                                }
+                                csvContentToSave = null
+                            }
+                        }
+                    }
+                )
+
                 LaunchedEffect(Unit) {
                     viewModel.exportCsvEvent.collectLatest { csvContent ->
                         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                         val fileName = "parkinson_data_$timestamp.csv"
-                        csvContentToSave = csvContent // Armazena o conteúdo
+                        csvContentToSave = csvContent
                         fileSaverLauncher.launch(fileName)
                     }
                 }
-
-                // Efeito para escrever no arquivo quando a URI estiver pronta e houver conteúdo
-                LaunchedEffect(csvContentToSave) {
-                    csvContentToSave?.let { content ->
-                        // Precisamos de uma forma de obter a URI aqui.
-                        // A abordagem com registerForActivityResult é mais complexa de integrar aqui.
-                        // A melhor abordagem é simplificar a lógica de salvamento.
-                        // Por enquanto, vamos manter a lógica de UI e corrigir a exibição.
-                    }
-                }
-
 
                 LaunchedEffect(Unit) {
                     while (true) {
@@ -166,7 +143,6 @@ fun TopBarContent(
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
-        // CORREÇÃO: Textos de status adicionados de volta
         Text(
             text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
             style = MaterialTheme.typography.bodyLarge,
@@ -208,6 +184,7 @@ fun DataListScreen(dataPoints: List<SensorDataPoint>) {
     }
 }
 
+
 @Composable
 fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
     val modelProducer = remember { ChartEntryModelProducer() }
@@ -232,12 +209,45 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
             Text("Aguardando dados para exibir o gráfico.")
         }
     } else {
+        val colorX = Color.Red
+        val colorY = Color.Green
+        val colorZ = Color.Blue
+
         Chart(
-            chart = lineChart(),
+            chart = lineChart(
+                lines = listOf(
+                    LineChart.LineSpec(lineColor = colorX.toArgb()),
+                    LineChart.LineSpec(lineColor = colorY.toArgb()),
+                    LineChart.LineSpec(lineColor = colorZ.toArgb())
+                )
+            ),
             chartModelProducer = modelProducer,
             startAxis = rememberStartAxis(),
             bottomAxis = rememberBottomAxis(),
-            modifier = Modifier.fillMaxSize().padding(16.dp)
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            legend = verticalLegend(
+                items = listOf(
+                    LegendItem(
+                        icon = shapeComponent(Shapes.pillShape, colorX),
+                        // --- CORREÇÃO FINAL: 'label' para estilo, 'labelText' para o conteúdo ---
+                        label = textComponent(color = MaterialTheme.colorScheme.onSurface),
+                        labelText = "Eixo X"
+                    ),
+                    LegendItem(
+                        icon = shapeComponent(Shapes.pillShape, colorY),
+                        label = textComponent(color = MaterialTheme.colorScheme.onSurface),
+                        labelText = "Eixo Y"
+                    ),
+                    LegendItem(
+                        icon = shapeComponent(Shapes.pillShape, colorZ),
+                        label = textComponent(color = MaterialTheme.colorScheme.onSurface),
+                        labelText = "Eixo Z"
+                    )
+                ),
+                iconSize = 8.dp,
+                iconPadding = 8.dp,
+                spacing = 4.dp
+            )
         )
     }
 }
@@ -245,9 +255,7 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
 @Composable
 fun DataPointCard(dataPoint: SensorDataPoint) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
