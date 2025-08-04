@@ -27,6 +27,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 
@@ -34,12 +35,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val messageClient by lazy { Wearable.getMessageClient(application) }
     private val nodeClient by lazy { Wearable.getNodeClient(application) }
-
-    // --- Lógica de Rede Adicionada ---
     private val networkClient = OkHttpClient()
-    // IMPORTANTE: Substituir este IP pelo do seu computador!
     private val serverUrl = "${BuildConfig.SERVER_URL}/data"
-    // --- Fim da Lógica de Rede ---
+
+    // --- MUDANÇA: Lógica de Envio em Lotes ---
+    private val dataBuffer = mutableListOf<SensorDataPoint>()
+    private val BATCH_SIZE = 25 // Envia a cada 25 amostras (0.5 segundos a 50Hz)
+    // --- Fim da Mudança ---
 
     private val _status = MutableStateFlow("Aguardando dados...")
     val status = _status.asStateFlow()
@@ -77,10 +79,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     currentList
                 }
 
-                // --- Lógica de Rede Adicionada ---
-                // Envia o novo dado para o servidor Python
-                sendDataToServer(it)
-                // --- Fim da Lógica de Rede ---
+                // --- MUDANÇA: Lógica de Envio em Lotes ---
+                synchronized(dataBuffer) {
+                    dataBuffer.add(it)
+                    if (dataBuffer.size >= BATCH_SIZE) {
+                        sendBatchToServer(ArrayList(dataBuffer)) // Envia uma cópia
+                        dataBuffer.clear() // Limpa o buffer
+                    }
+                }
+                // --- Fim da Mudança ---
 
                 statusUpdateJob = viewModelScope.launch {
                     delay(3000L)
@@ -96,18 +103,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         checkConnection()
     }
 
-    // --- Lógica de Rede Adicionada ---
-    private fun sendDataToServer(dataPoint: SensorDataPoint) {
+    // --- MUDANÇA: Função atualizada para enviar um lote de dados ---
+    private fun sendBatchToServer(batch: List<SensorDataPoint>) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val jsonObject = JSONObject().apply {
-                    put("timestamp", dataPoint.timestamp)
-                    put("x", dataPoint.values[0])
-                    put("y", dataPoint.values[1])
-                    put("z", dataPoint.values[2])
+                // Cria um array JSON a partir da lista de data points
+                val jsonArray = JSONArray()
+                batch.forEach { dataPoint ->
+                    val jsonObject = JSONObject().apply {
+                        put("timestamp", dataPoint.timestamp)
+                        put("x", dataPoint.values[0])
+                        put("y", dataPoint.values[1])
+                        put("z", dataPoint.values[2])
+                    }
+                    jsonArray.put(jsonObject)
                 }
 
-                val requestBody = jsonObject.toString()
+                val requestBody = jsonArray.toString()
                     .toRequestBody("application/json; charset=utf-8".toMediaType())
 
                 val request = Request.Builder()
@@ -117,32 +129,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 networkClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
-                        Log.d("MainViewModel", "Dado enviado com sucesso para o servidor.")
+                        Log.d("MainViewModel", "${batch.size} dados enviados com sucesso para o servidor.")
                     } else {
-                        Log.e("MainViewModel", "Falha ao enviar dado: ${response.code} - ${response.message}")
+                        Log.e("MainViewModel", "Falha ao enviar lote: ${response.code} - ${response.message}")
                     }
                 }
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Erro de rede ao enviar dado", e)
+                Log.e("MainViewModel", "Erro de rede ao enviar lote", e)
             }
         }
     }
-    // --- Fim da Lógica de Rede ---
+    // --- Fim da Mudança ---
 
     fun checkConnection() {
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
-            val nearbyNodes = nodes.filter { it.isNearby }
-            _isConnected.value = nearbyNodes.isNotEmpty()
-
-            if (nearbyNodes.isNotEmpty()) {
-                val nodeInfo = nearbyNodes.joinToString(", ") { node -> "${node.displayName} (ID: ${node.id})" }
-                Log.d("MainViewModel", "Conectado ao(s) nó(s): $nodeInfo")
-            } else {
-                Log.d("MainViewModel", "Nenhum nó conectado.")
-            }
-        }.addOnFailureListener { e ->
-            _isConnected.value = false
-            Log.e("MainViewModel", "Falha ao verificar nós conectados", e)
+            _isConnected.value = nodes.any { it.isNearby }
         }
     }
 
@@ -153,12 +154,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _status.value = "Nenhum dado para exportar."
                 return@launch
             }
-
-            val stringBuilder = StringBuilder()
-            stringBuilder.append("timestamp,x,y,z\n")
-            data.forEach { dataPoint ->
-                val line = "${dataPoint.timestamp},${dataPoint.values[0]},${dataPoint.values[1]},${dataPoint.values[2]}\n"
-                stringBuilder.append(line)
+            val stringBuilder = StringBuilder().apply {
+                append("timestamp,x,y,z\n")
+                data.forEach { dp ->
+                    append("${dp.timestamp},${dp.values[0]},${dp.values[1]},${dp.values[2]}\n")
+                }
             }
             _exportCsvEvent.emit(stringBuilder.toString())
         }
@@ -166,10 +166,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendPingToWatch() {
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
-            nodes.forEach { node ->
+            nodes.filter { it.isNearby }.forEach { node ->
                 messageClient.sendMessage(node.id, DataLayerConstants.PING_PATH, "PING".toByteArray(StandardCharsets.UTF_8))
-                    .addOnSuccessListener { Log.d("MainViewModel", "Ping enviado para ${node.displayName}") }
-                    .addOnFailureListener { e -> Log.e("MainViewModel", "Falha ao enviar Ping", e) }
             }
         }
     }
