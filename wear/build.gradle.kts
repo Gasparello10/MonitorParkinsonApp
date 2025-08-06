@@ -39,6 +39,7 @@ android {
 
 dependencies {
     implementation(project(":shared"))
+    implementation("androidx.core:core-ktx:1.10.1")
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.play.services.wearable)
     implementation(platform(libs.androidx.compose.bom))

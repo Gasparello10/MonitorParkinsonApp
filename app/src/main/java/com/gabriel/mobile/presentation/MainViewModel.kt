@@ -15,12 +15,12 @@ import com.gabriel.mobile.service.DataLayerListenerService
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,6 +30,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import java.util.UUID
+
+data class Patient(val id: String = UUID.randomUUID().toString(), val name: String)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -37,8 +40,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val nodeClient by lazy { Wearable.getNodeClient(application) }
     private val networkClient = OkHttpClient()
     private val serverUrl = "${BuildConfig.SERVER_URL}/data"
+    private val gson = Gson()
+    private val sharedPreferences = application.getSharedPreferences("patient_prefs", Context.MODE_PRIVATE)
 
-    // Buffer para enviar dados em lote para o servidor
+    private val _patients = MutableStateFlow<List<Patient>>(emptyList())
+    val patients = _patients.asStateFlow()
+
+    private val _selectedPatient = MutableStateFlow<Patient?>(null)
+    val selectedPatient = _selectedPatient.asStateFlow()
+
+    private val _isSessionActive = MutableStateFlow(false)
+    val isSessionActive = _isSessionActive.asStateFlow()
+
+    private var currentSessionId: String? = null
+
     private val dataBuffer = mutableListOf<SensorDataPoint>()
     private val BATCH_SIZE = 25
 
@@ -51,20 +66,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
     val sensorDataPoints = _sensorDataPoints.asStateFlow()
 
-    private val _exportCsvEvent = MutableSharedFlow<String>()
-    val exportCsvEvent = _exportCsvEvent.asSharedFlow()
-
     private val maxDataPointsForChart = 100
     private val dataQueue = ArrayDeque<SensorDataPoint>(maxDataPointsForChart)
     private var statusUpdateJob: Job? = null
-
-    // --- MUDANÇA: Buffer para otimizar as atualizações da UI ---
     private val uiUpdateBuffer = mutableListOf<SensorDataPoint>()
-    private val UI_UPDATE_BATCH_SIZE = 25 // Atualiza a UI a cada x amostras (10x por segundo a 50Hz)
-    // --- Fim da Mudança ---
+    private val UI_UPDATE_BATCH_SIZE = 5
 
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (!_isSessionActive.value) return
+
             val dataPoint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA, SensorDataPoint::class.java)
             } else {
@@ -74,17 +85,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             dataPoint?.let {
                 statusUpdateJob?.cancel()
-                _status.value = "Recebendo dados..."
+                _status.value = "Recebendo Dados..."
 
-                // Adiciona o ponto à fila de dados para o gráfico
                 synchronized(dataQueue) {
-                    if (dataQueue.size >= maxDataPointsForChart) {
-                        dataQueue.removeFirst()
-                    }
+                    if (dataQueue.size >= maxDataPointsForChart) dataQueue.removeFirst()
                     dataQueue.addLast(it)
                 }
 
-                // Adiciona o ponto ao buffer de envio para o servidor
                 synchronized(dataBuffer) {
                     dataBuffer.add(it)
                     if (dataBuffer.size >= BATCH_SIZE) {
@@ -93,16 +100,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // --- MUDANÇA: Lógica de atualização da UI em lotes ---
                 synchronized(uiUpdateBuffer) {
                     uiUpdateBuffer.add(it)
                     if (uiUpdateBuffer.size >= UI_UPDATE_BATCH_SIZE) {
-                        // Atingiu o tamanho do lote, atualiza a UI com a janela de dados mais recente
                         _sensorDataPoints.value = dataQueue.toList()
-                        uiUpdateBuffer.clear() // Limpa o buffer para o próximo lote
+                        uiUpdateBuffer.clear()
                     }
                 }
-                // --- Fim da Mudança ---
 
                 statusUpdateJob = viewModelScope.launch {
                     delay(3000L)
@@ -116,37 +120,97 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val intentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_SENSOR_DATA)
         LocalBroadcastManager.getInstance(application).registerReceiver(sensorDataReceiver, intentFilter)
         checkConnection()
+        loadPatients()
+    }
+
+    fun addPatient(name: String) {
+        val newPatient = Patient(name = name)
+        val updatedList = _patients.value + newPatient
+        _patients.value = updatedList
+        savePatients(updatedList)
+    }
+
+    fun selectPatient(patient: Patient) {
+        _selectedPatient.value = patient
+    }
+
+    fun startSession() {
+        if (_selectedPatient.value != null) {
+            currentSessionId = System.currentTimeMillis().toString()
+            _isSessionActive.value = true
+            _sensorDataPoints.value = emptyList()
+            dataQueue.clear()
+            // --- MUDANÇA: Envia o comando START_COMMAND ---
+            sendCommandToWatch(DataLayerConstants.START_COMMAND)
+        }
+    }
+
+    fun stopSession() {
+        // --- MUDANÇA: Envia o comando STOP_COMMAND ---
+        sendCommandToWatch(DataLayerConstants.STOP_COMMAND)
+
+        if (dataBuffer.isNotEmpty()) {
+            sendBatchToServer(ArrayList(dataBuffer))
+            dataBuffer.clear()
+        }
+        _isSessionActive.value = false
+        currentSessionId = null
+    }
+
+    private fun savePatients(patients: List<Patient>) {
+        val json = gson.toJson(patients)
+        sharedPreferences.edit().putString("patient_list", json).apply()
+    }
+
+    private fun loadPatients() {
+        val json = sharedPreferences.getString("patient_list", null)
+        if (json != null) {
+            val type = object : TypeToken<List<Patient>>() {}.type
+            _patients.value = gson.fromJson(json, type)
+        }
     }
 
     private fun sendBatchToServer(batch: List<SensorDataPoint>) {
+        val patientId = _selectedPatient.value?.name ?: return
+        val sessionId = currentSessionId ?: return
+
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val jsonArray = JSONArray()
-                batch.forEach { dataPoint ->
-                    val jsonObject = JSONObject().apply {
-                        put("timestamp", dataPoint.timestamp)
-                        put("x", dataPoint.values[0])
-                        put("y", dataPoint.values[1])
-                        put("z", dataPoint.values[2])
+                val rootJsonObject = JSONObject().apply {
+                    put("patientId", patientId)
+                    put("sessionId", sessionId)
+                    val dataJsonArray = JSONArray()
+                    batch.forEach { dp ->
+                        val dataObject = JSONObject().apply {
+                            put("timestamp", dp.timestamp)
+                            put("x", dp.values[0])
+                            put("y", dp.values[1])
+                            put("z", dp.values[2])
+                        }
+                        dataJsonArray.put(dataObject)
                     }
-                    jsonArray.put(jsonObject)
+                    put("data", dataJsonArray)
                 }
 
-                val requestBody = jsonArray.toString()
-                    .toRequestBody("application/json; charset=utf-8".toMediaType())
-
-                val request = Request.Builder()
-                    .url(serverUrl)
-                    .post(requestBody)
-                    .build()
-
+                val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = Request.Builder().url(serverUrl).post(requestBody).build()
                 networkClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        Log.e("MainViewModel", "Falha ao enviar lote: ${response.code}")
-                    }
+                    if (!response.isSuccessful) Log.e("MainViewModel", "Falha ao enviar lote: ${response.code}")
                 }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Erro de rede ao enviar lote", e)
+            }
+        }
+    }
+
+    // --- MUDANÇA: Função atualizada para enviar o comando como dados no caminho de controlo ---
+    private fun sendCommandToWatch(command: String) {
+        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
+            nodes.forEach { node ->
+                val payload = command.toByteArray(StandardCharsets.UTF_8)
+                messageClient.sendMessage(node.id, DataLayerConstants.CONTROL_PATH, payload)
+                    .addOnSuccessListener { Log.d("MainViewModel", "Comando '$command' enviado para o relógio ${node.displayName}") }
+                    .addOnFailureListener { Log.e("MainViewModel", "Falha ao enviar comando '$command' para o relógio ${node.displayName}") }
             }
         }
     }
@@ -157,29 +221,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun exportDataToCsv() {
-        viewModelScope.launch {
-            val data = _sensorDataPoints.value
-            if (data.isEmpty()) {
-                _status.value = "Nenhum dado para exportar."
-                return@launch
-            }
-            val stringBuilder = StringBuilder().apply {
-                append("timestamp,x,y,z\n")
-                data.forEach { dp ->
-                    append("${dp.timestamp},${dp.values[0]},${dp.values[1]},${dp.values[2]}\n")
-                }
-            }
-            _exportCsvEvent.emit(stringBuilder.toString())
-        }
-    }
-
     fun sendPingToWatch() {
-        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
-            nodes.filter { it.isNearby }.forEach { node ->
-                messageClient.sendMessage(node.id, DataLayerConstants.PING_PATH, "PING".toByteArray(StandardCharsets.UTF_8))
-            }
-        }
+        sendCommandToWatch("ping") // Pode reutilizar a função de comando
     }
 
     override fun onCleared() {

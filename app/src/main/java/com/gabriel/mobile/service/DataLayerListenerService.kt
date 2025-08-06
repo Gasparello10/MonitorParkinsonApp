@@ -4,47 +4,41 @@ import android.content.Intent
 import android.util.Log
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.gabriel.shared.DataLayerConstants
-import com.gabriel.shared.SensorDataPoint
-import com.google.android.gms.wearable.DataEvent
-import com.google.android.gms.wearable.DataEventBuffer
-import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
+import java.io.ByteArrayInputStream
+import java.io.ObjectInputStream
 
 class DataLayerListenerService : WearableListenerService() {
-
-    override fun onCreate() {
-        super.onCreate()
-
-    }
-    override fun onDataChanged(dataEvents: DataEventBuffer) {
-        super.onDataChanged(dataEvents)
-
-        dataEvents.forEach { event ->
-            if (event.type == DataEvent.TYPE_CHANGED && event.dataItem.uri.path == DataLayerConstants.SENSOR_DATA_PATH) {
-                try {
-                    val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
-                    val timestamp = dataMap.getLong(DataLayerConstants.KEY_TIMESTAMP)
-                    val values = dataMap.getFloatArray(DataLayerConstants.KEY_VALUES)
-
-                    if (values != null) {
-                        val dataPoint = SensorDataPoint(timestamp, values)
-                        Log.d("DataLayerListener", "SensorDataPoint recebido: $dataPoint")
-
-                        // Envia o objeto SensorDataPoint completo para o ViewModel
-                        val intent = Intent(ACTION_RECEIVE_SENSOR_DATA).apply {
-                            putExtra(EXTRA_SENSOR_DATA, dataPoint) // dataPoint é Serializable
-                        }
-                        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
-                    }
-                } catch (e: Exception) {
-                    Log.e("DataLayerListener", "Erro ao processar DataItem", e)
-                }
-            }
-        }
-    }
 
     companion object {
         const val ACTION_RECEIVE_SENSOR_DATA = "com.gabriel.mobile.RECEIVE_SENSOR_DATA"
         const val EXTRA_SENSOR_DATA = "extra_sensor_data"
+    }
+
+    override fun onMessageReceived(messageEvent: MessageEvent) {
+        super.onMessageReceived(messageEvent)
+
+        when (messageEvent.path) {
+            // Este serviço ouve os dados do sensor enviados pelo relógio
+            DataLayerConstants.SENSOR_DATA_PATH -> {
+                try {
+                    val byteArrayInputStream = ByteArrayInputStream(messageEvent.data)
+                    val objectInputStream = ObjectInputStream(byteArrayInputStream)
+                    val dataPoint = objectInputStream.readObject()
+
+                    Log.d("DataLayerListener", "Dados do sensor recebidos do relógio!")
+
+                    // Envia os dados recebidos para o MainViewModel através de um broadcast local
+                    val intent = Intent(ACTION_RECEIVE_SENSOR_DATA).apply {
+                        putExtra(EXTRA_SENSOR_DATA, dataPoint as java.io.Serializable)
+                    }
+                    LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+
+                } catch (e: Exception) {
+                    Log.e("DataLayerListener", "Erro ao desserializar os dados do sensor", e)
+                }
+            }
+        }
     }
 }
