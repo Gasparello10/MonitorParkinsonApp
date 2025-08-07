@@ -22,7 +22,7 @@ android {
     buildTypes {
         debug {
             // Esta linha cria uma variável BuildConfig.SERVER_URL para a versão de debug
-            buildConfigField("String", "SERVER_URL", "\"http://172.20.10.5:5000\"")
+            buildConfigField("String", "SERVER_URL", "\"http://10.4.10.208:5000\"")
         }
         release {
             isMinifyEnabled = false
@@ -59,6 +59,7 @@ dependencies {
     implementation("com.patrykandpatrick.vico:compose:1.14.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("io.socket:socket.io-client:2.1.0")
 
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.play.services.wearable)

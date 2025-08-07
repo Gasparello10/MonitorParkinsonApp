@@ -4,7 +4,7 @@
     <selectionStates>
       <SelectionState runConfigName="MonitorParkinsonApp.app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2025-07-30T19:33:45.255929700Z">
+        <DropdownSelection timestamp="2025-08-07T01:18:38.566042800Z">
           <Target type="DEFAULT_BOOT">
             <handle>
               <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\Gabriel\.android\avd\Medium_Phone.avd" />

@@ -17,6 +17,8 @@ import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import io.socket.client.IO
+import io.socket.client.Socket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,6 +45,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val gson = Gson()
     private val sharedPreferences = application.getSharedPreferences("patient_prefs", Context.MODE_PRIVATE)
 
+    private var socket: Socket? = null
+    private val socketUrl = BuildConfig.SERVER_URL.replace("http", "ws")
+
     private val _patients = MutableStateFlow<List<Patient>>(emptyList())
     val patients = _patients.asStateFlow()
 
@@ -52,8 +57,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSessionActive = MutableStateFlow(false)
     val isSessionActive = _isSessionActive.asStateFlow()
 
-    private var currentSessionId: String? = null
-
+    private var currentSessionId: Int? = null
     private val dataBuffer = mutableListOf<SensorDataPoint>()
     private val BATCH_SIZE = 25
 
@@ -75,44 +79,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!_isSessionActive.value) return
-
             val dataPoint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA, SensorDataPoint::class.java)
             } else {
                 @Suppress("DEPRECATION")
                 intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA) as? SensorDataPoint
             }
-
-            dataPoint?.let {
-                statusUpdateJob?.cancel()
-                _status.value = "Recebendo Dados..."
-
-                synchronized(dataQueue) {
-                    if (dataQueue.size >= maxDataPointsForChart) dataQueue.removeFirst()
-                    dataQueue.addLast(it)
-                }
-
-                synchronized(dataBuffer) {
-                    dataBuffer.add(it)
-                    if (dataBuffer.size >= BATCH_SIZE) {
-                        sendBatchToServer(ArrayList(dataBuffer))
-                        dataBuffer.clear()
-                    }
-                }
-
-                synchronized(uiUpdateBuffer) {
-                    uiUpdateBuffer.add(it)
-                    if (uiUpdateBuffer.size >= UI_UPDATE_BATCH_SIZE) {
-                        _sensorDataPoints.value = dataQueue.toList()
-                        uiUpdateBuffer.clear()
-                    }
-                }
-
-                statusUpdateJob = viewModelScope.launch {
-                    delay(3000L)
-                    _status.value = "Parado"
-                }
-            }
+            dataPoint?.let { processDataPoint(it) }
         }
     }
 
@@ -123,6 +96,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadPatients()
     }
 
+    private fun setupSocketListeners() {
+        socket?.on(Socket.EVENT_CONNECT) {
+            Log.d("SocketIO", "Conectado ao servidor!")
+            _selectedPatient.value?.let { patient ->
+                socket?.emit("register_patient", JSONObject().put("patientId", patient.name))
+            }
+        }
+        socket?.on("start_monitoring") { args ->
+            try {
+                val data = args[0] as JSONObject
+                val sessionId = data.getInt("sessao_id")
+                Log.d("SocketIO", "Comando 'start' recebido com sessao_id: $sessionId")
+                startSession(sessionId)
+            } catch (e: Exception) {
+                Log.e("SocketIO", "Erro ao processar 'start_monitoring'", e)
+            }
+        }
+        socket?.on("stop_monitoring") {
+            Log.d("SocketIO", "Comando 'stop' recebido")
+            stopSession()
+        }
+        socket?.on(Socket.EVENT_DISCONNECT) {
+            Log.d("SocketIO", "Desconectado do servidor.")
+        }
+    }
+
+    private fun connectToSocket() {
+        if (_selectedPatient.value == null) return
+        try {
+            socket?.disconnect()
+            socket = IO.socket(socketUrl)
+            setupSocketListeners()
+            socket?.connect()
+        } catch (e: Exception) {
+            Log.e("SocketIO", "Erro ao conectar: ${e.message}")
+        }
+    }
+
+    private fun disconnectFromSocket() {
+        socket?.disconnect()
+        socket?.off()
+    }
+
     fun addPatient(name: String) {
         val newPatient = Patient(name = name)
         val updatedList = _patients.value + newPatient
@@ -130,31 +146,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         savePatients(updatedList)
     }
 
-    fun selectPatient(patient: Patient) {
-        _selectedPatient.value = patient
+    // <<< NOVA FUNÇÃO PARA EXCLUIR >>>
+    fun deletePatient(patientToDelete: Patient) {
+        if (_selectedPatient.value?.id == patientToDelete.id) {
+            disconnectFromSocket()
+            _selectedPatient.value = null
+        }
+        val updatedList = _patients.value.filter { it.id != patientToDelete.id }
+        _patients.value = updatedList
+        savePatients(updatedList)
     }
 
-    fun startSession() {
+    fun selectPatient(patient: Patient) {
+        if (_selectedPatient.value?.id != patient.id) {
+            disconnectFromSocket()
+            _selectedPatient.value = patient
+            connectToSocket()
+        }
+    }
+
+    fun startSession(sessionId: Int) {
         if (_selectedPatient.value != null) {
-            currentSessionId = System.currentTimeMillis().toString()
+            currentSessionId = sessionId
             _isSessionActive.value = true
             _sensorDataPoints.value = emptyList()
             dataQueue.clear()
-            // --- MUDANÇA: Envia o comando START_COMMAND ---
             sendCommandToWatch(DataLayerConstants.START_COMMAND)
         }
     }
 
     fun stopSession() {
-        // --- MUDANÇA: Envia o comando STOP_COMMAND ---
         sendCommandToWatch(DataLayerConstants.STOP_COMMAND)
-
         if (dataBuffer.isNotEmpty()) {
             sendBatchToServer(ArrayList(dataBuffer))
             dataBuffer.clear()
         }
         _isSessionActive.value = false
         currentSessionId = null
+    }
+
+    private fun processDataPoint(dataPoint: SensorDataPoint) {
+        statusUpdateJob?.cancel()
+        _status.value = "Recebendo Dados..."
+        synchronized(dataQueue) {
+            if (dataQueue.size >= maxDataPointsForChart) dataQueue.removeFirst()
+            dataQueue.addLast(dataPoint)
+        }
+        synchronized(dataBuffer) {
+            dataBuffer.add(dataPoint)
+            if (dataBuffer.size >= BATCH_SIZE) {
+                sendBatchToServer(ArrayList(dataBuffer))
+                dataBuffer.clear()
+            }
+        }
+        synchronized(uiUpdateBuffer) {
+            uiUpdateBuffer.add(dataPoint)
+            if (uiUpdateBuffer.size >= UI_UPDATE_BATCH_SIZE) {
+                _sensorDataPoints.value = dataQueue.toList()
+                uiUpdateBuffer.clear()
+            }
+        }
+        statusUpdateJob = viewModelScope.launch {
+            delay(3000L)
+            _status.value = "Parado"
+        }
     }
 
     private fun savePatients(patients: List<Patient>) {
@@ -173,12 +228,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun sendBatchToServer(batch: List<SensorDataPoint>) {
         val patientId = _selectedPatient.value?.name ?: return
         val sessionId = currentSessionId ?: return
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val rootJsonObject = JSONObject().apply {
                     put("patientId", patientId)
-                    put("sessionId", sessionId)
+                    put("sessao_id", sessionId)
                     val dataJsonArray = JSONArray()
                     batch.forEach { dp ->
                         val dataObject = JSONObject().apply {
@@ -191,11 +245,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     put("data", dataJsonArray)
                 }
-
                 val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 val request = Request.Builder().url(serverUrl).post(requestBody).build()
                 networkClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) Log.e("MainViewModel", "Falha ao enviar lote: ${response.code}")
+                    else Log.d("MainViewModel", "Lote enviado com sucesso para a sessão $sessionId")
                 }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Erro de rede ao enviar lote", e)
@@ -203,7 +257,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- MUDANÇA: Função atualizada para enviar o comando como dados no caminho de controlo ---
     private fun sendCommandToWatch(command: String) {
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
             nodes.forEach { node ->
@@ -221,12 +274,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendPingToWatch() {
-        sendCommandToWatch("ping") // Pode reutilizar a função de comando
-    }
-
     override fun onCleared() {
         super.onCleared()
+        disconnectFromSocket()
         statusUpdateJob?.cancel()
         LocalBroadcastManager.getInstance(getApplication()).unregisterReceiver(sensorDataReceiver)
     }

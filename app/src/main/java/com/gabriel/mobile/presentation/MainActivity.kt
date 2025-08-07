@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.gabriel.mobile.ui.theme.MonitorParkinsonAppTheme
@@ -35,10 +37,6 @@ import com.patrykandpatrick.vico.core.component.shape.Shapes
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.legend.LegendItem
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
-import java.text.SimpleDateFormat
-import java.util.*
 
 class MainActivity : ComponentActivity() {
 
@@ -60,7 +58,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@ExperimentalMaterial3Api
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PatientManagementScreen(viewModel: MainViewModel) {
@@ -83,14 +80,15 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (patients.isEmpty()) {
-                Text("Nenhum paciente registado. Adicione um para começar.")
+                Text("Nenhum paciente cadastrado. Adicione um para começar.")
             } else {
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     items(patients) { patient ->
                         PatientItem(
                             patient = patient,
                             isSelected = patient.id == selectedPatient?.id,
-                            onSelect = { viewModel.selectPatient(patient) }
+                            onSelect = { viewModel.selectPatient(patient) },
+                            onDelete = { viewModel.deletePatient(patient) } // <<< Passa a função de exclusão
                         )
                     }
                 }
@@ -98,12 +96,24 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            Button(
-                onClick = { viewModel.startSession() },
-                enabled = selectedPatient != null,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (selectedPatient != null) "Iniciar Sessão para ${selectedPatient?.name}" else "Selecione um Paciente")
+            if (selectedPatient != null) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("Paciente Selecionado:", style = MaterialTheme.typography.titleMedium)
+                        Text(selectedPatient!!.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Este paciente está online. A sessão deve ser iniciada e parada através do dashboard web.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                Text("Selecione um paciente da lista para o conectar ao servidor.")
             }
         }
     }
@@ -120,18 +130,38 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-fun PatientItem(patient: Patient, isSelected: Boolean, onSelect: () -> Unit) {
+fun PatientItem(
+    patient: Patient,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit // <<< Adiciona o parâmetro para a exclusão
+) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable(onClick = onSelect),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable(onClick = onSelect),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Text(
-            text = patient.name,
-            modifier = Modifier.padding(16.dp),
-            style = MaterialTheme.typography.bodyLarge
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = patient.name,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Excluir Paciente",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
@@ -154,23 +184,19 @@ fun AddPatientDialog(onDismiss: () -> Unit, onAddPatient: (String) -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancelar")
-                    }
+                    TextButton(onClick = onDismiss) { Text("Cancelar") }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { onAddPatient(patientName) },
                         enabled = patientName.isNotBlank()
-                    ) {
-                        Text("Adicionar")
-                    }
+                    ) { Text("Adicionar") }
                 }
             }
         }
     }
 }
 
-
+// O restante do arquivo (MonitoringScreen, DataListScreen, etc.) não foi alterado.
 @Composable
 fun MonitoringScreen(viewModel: MainViewModel) {
     val status by viewModel.status.collectAsState()
