@@ -24,6 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -60,6 +61,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var currentSessionId: Int? = null
     private val dataBuffer = mutableListOf<SensorDataPoint>()
     private val BATCH_SIZE = 25
+
+    // <<< NOVO: Estados para o modo de seleção e exclusão >>>
+    private val _isInSelectionMode = MutableStateFlow(false)
+    val isInSelectionMode = _isInSelectionMode.asStateFlow()
+
+    private val _selectedForDeletion = MutableStateFlow<Set<String>>(emptySet())
+    val selectedForDeletion = _selectedForDeletion.asStateFlow()
+    // <<< FIM DOS NOVOS ESTADOS >>>
+
 
     private val _status = MutableStateFlow("Aguardando dados...")
     val status = _status.asStateFlow()
@@ -146,16 +156,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         savePatients(updatedList)
     }
 
-    // <<< NOVA FUNÇÃO PARA EXCLUIR >>>
-    fun deletePatient(patientToDelete: Patient) {
-        if (_selectedPatient.value?.id == patientToDelete.id) {
+    // <<< NOVAS FUNÇÕES PARA GERENCIAR A SELEÇÃO E EXCLUSÃO >>>
+    fun enterSelectionMode(initialPatientId: String) {
+        _isInSelectionMode.value = true
+        _selectedForDeletion.value = setOf(initialPatientId)
+    }
+
+    fun toggleSelection(patientId: String) {
+        _selectedForDeletion.update { currentSelection ->
+            if (currentSelection.contains(patientId)) {
+                currentSelection - patientId
+            } else {
+                currentSelection + patientId
+            }
+        }
+    }
+
+    fun deleteSelectedPatients() {
+        val selection = _selectedForDeletion.value
+        if (selection.isEmpty()) {
+            exitSelectionMode()
+            return
+        }
+
+        // Verifica se o paciente atualmente conectado está na lista de exclusão
+        if (_selectedPatient.value != null && selection.contains(_selectedPatient.value!!.id)) {
             disconnectFromSocket()
             _selectedPatient.value = null
         }
-        val updatedList = _patients.value.filter { it.id != patientToDelete.id }
+
+        val updatedList = _patients.value.filter { !selection.contains(it.id) }
         _patients.value = updatedList
         savePatients(updatedList)
+
+        exitSelectionMode()
     }
+
+    fun exitSelectionMode() {
+        _isInSelectionMode.value = false
+        _selectedForDeletion.value = emptySet()
+    }
+    // <<< FIM DAS NOVAS FUNÇÕES >>>
+
 
     fun selectPatient(patient: Patient) {
         if (_selectedPatient.value?.id != patient.id) {

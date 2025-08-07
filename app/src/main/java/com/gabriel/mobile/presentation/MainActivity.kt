@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package com.gabriel.mobile.presentation
 
@@ -6,19 +6,20 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -37,6 +38,7 @@ import com.patrykandpatrick.vico.core.component.shape.Shapes
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.legend.LegendItem
+
 
 class MainActivity : ComponentActivity() {
 
@@ -58,37 +60,103 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+fun WatchStatusIndicator(
+    isConnected: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val backgroundColor = if (isConnected) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+    val contentColor = if (isConnected) Color(0xFF388E3C) else Color(0xFFD32F2F)
+    val icon = if (isConnected) Icons.Default.CheckCircle else Icons.Default.Warning
+    val text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado"
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(imageVector = icon, contentDescription = "Status do Relógio", tint = contentColor)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = text, color = contentColor, fontWeight = FontWeight.Bold)
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Verificar Conexão Novamente",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PatientManagementScreen(viewModel: MainViewModel) {
     val patients by viewModel.patients.collectAsState()
     val selectedPatient by viewModel.selectedPatient.collectAsState()
     var showAddPatientDialog by remember { mutableStateOf(false) }
+    val isInSelectionMode by viewModel.isInSelectionMode.collectAsState()
+    val selectedForDeletion by viewModel.selectedForDeletion.collectAsState()
+    val isConnected by viewModel.isConnected.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Gestão de Pacientes") })
+            if (isInSelectionMode) {
+                SelectionModeTopAppBar(
+                    selectedCount = selectedForDeletion.size,
+                    onClose = { viewModel.exitSelectionMode() },
+                    onDelete = { viewModel.deleteSelectedPatients() }
+                )
+            } else {
+                TopAppBar(title = { Text("Gestão de Pacientes") })
+            }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddPatientDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Adicionar Paciente")
+            if (!isInSelectionMode) {
+                FloatingActionButton(onClick = { showAddPatientDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Adicionar Paciente")
+                }
             }
         }
     ) { innerPadding ->
         Column(
-            modifier = Modifier.padding(innerPadding).padding(16.dp).fillMaxSize(),
+            modifier = Modifier
+                .padding(innerPadding)
+                .padding(16.dp)
+                .fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            WatchStatusIndicator(
+                isConnected = isConnected,
+                onRefresh = { viewModel.checkConnection() },
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
             if (patients.isEmpty()) {
-                Text("Nenhum paciente cadastrado. Adicione um para começar.")
+                Text(
+                    "Nenhum paciente cadastrado. Adicione um para começar.",
+                    modifier = Modifier.padding(16.dp),
+                    textAlign = TextAlign.Center
+                )
             } else {
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    items(patients) { patient ->
+                    items(patients, key = { it.id }) { patient ->
                         PatientItem(
                             patient = patient,
-                            isSelected = patient.id == selectedPatient?.id,
-                            onSelect = { viewModel.selectPatient(patient) },
-                            onDelete = { viewModel.deletePatient(patient) } // <<< Passa a função de exclusão
+                            isSelectedForConnection = patient.id == selectedPatient?.id,
+                            isInSelectionMode = isInSelectionMode,
+                            isSelectedForDeletion = selectedForDeletion.contains(patient.id),
+                            onToggleSelection = { viewModel.toggleSelection(patient.id) },
+                            onStartSelectionMode = { viewModel.enterSelectionMode(patient.id) },
+                            onSelectForConnection = { viewModel.selectPatient(patient) }
                         )
                     }
                 }
@@ -96,7 +164,7 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            if (selectedPatient != null) {
+            if (selectedPatient != null && !isInSelectionMode) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -112,7 +180,7 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
                         )
                     }
                 }
-            } else {
+            } else if (!isInSelectionMode) {
                 Text("Selecione um paciente da lista para o conectar ao servidor.")
             }
         }
@@ -130,37 +198,75 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
 }
 
 @Composable
+fun SelectionModeTopAppBar(selectedCount: Int, onClose: () -> Unit, onDelete: () -> Unit) {
+    TopAppBar(
+        title = { Text("$selectedCount selecionado(s)") },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, contentDescription = "Cancelar Seleção")
+            }
+        },
+        actions = {
+            IconButton(onClick = onDelete, enabled = selectedCount > 0) {
+                Icon(Icons.Default.Delete, contentDescription = "Excluir Selecionados")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 fun PatientItem(
     patient: Patient,
-    isSelected: Boolean,
-    onSelect: () -> Unit,
-    onDelete: () -> Unit // <<< Adiciona o parâmetro para a exclusão
+    isSelectedForConnection: Boolean,
+    isInSelectionMode: Boolean,
+    isSelectedForDeletion: Boolean,
+    onToggleSelection: () -> Unit,
+    onStartSelectionMode: () -> Unit,
+    onSelectForConnection: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clickable(onClick = onSelect),
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = {
+                        onStartSelectionMode()
+                    },
+                    onTap = {
+                        if (isInSelectionMode) {
+                            onToggleSelection()
+                        } else {
+                            onSelectForConnection()
+                        }
+                    }
+                )
+            },
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+            containerColor = if (isSelectedForConnection && !isInSelectionMode) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
         )
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            if (isInSelectionMode) {
+                Checkbox(
+                    checked = isSelectedForDeletion,
+                    onCheckedChange = { onToggleSelection() }
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+            }
             Text(
                 text = patient.name,
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f)
             )
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Excluir Paciente",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
     }
 }
@@ -168,35 +274,23 @@ fun PatientItem(
 @Composable
 fun AddPatientDialog(onDismiss: () -> Unit, onAddPatient: (String) -> Unit) {
     var patientName by remember { mutableStateOf("") }
-
     Dialog(onDismissRequest = onDismiss) {
         Card {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Adicionar Novo Paciente", style = MaterialTheme.typography.headlineSmall)
                 Spacer(modifier = Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = patientName,
-                    onValueChange = { patientName = it },
-                    label = { Text("Nome do Paciente") }
-                )
+                OutlinedTextField(value = patientName, onValueChange = { patientName = it }, label = { Text("Nome do Paciente") })
                 Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Cancelar") }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = { onAddPatient(patientName) },
-                        enabled = patientName.isNotBlank()
-                    ) { Text("Adicionar") }
+                    Button(onClick = { onAddPatient(patientName) }, enabled = patientName.isNotBlank()) { Text("Adicionar") }
                 }
             }
         }
     }
 }
 
-// O restante do arquivo (MonitoringScreen, DataListScreen, etc.) não foi alterado.
 @Composable
 fun MonitoringScreen(viewModel: MainViewModel) {
     val status by viewModel.status.collectAsState()
@@ -204,27 +298,16 @@ fun MonitoringScreen(viewModel: MainViewModel) {
     val isConnected by viewModel.isConnected.collectAsState()
     var selectedTabIndex by remember { mutableStateOf(0) }
     val tabs = listOf("Dados", "Gráfico")
-
-    Scaffold(
-        topBar = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                MonitoringTopBar(
-                    status = status,
-                    isConnected = isConnected,
-                    onStopSession = { viewModel.stopSession() }
-                )
-                TabRow(selectedTabIndex = selectedTabIndex) {
-                    tabs.forEachIndexed { index, title ->
-                        Tab(
-                            selected = selectedTabIndex == index,
-                            onClick = { selectedTabIndex = index },
-                            text = { Text(title) }
-                        )
-                    }
+    Scaffold(topBar = {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            MonitoringTopBar(status = status, isConnected = isConnected, onStopSession = { viewModel.stopSession() })
+            TabRow(selectedTabIndex = selectedTabIndex) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(selected = selectedTabIndex == index, onClick = { selectedTabIndex = index }, text = { Text(title) })
                 }
             }
         }
-    ) { innerPadding ->
+    }) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding)) {
             when (selectedTabIndex) {
                 0 -> DataListScreen(dataPoints = dataPoints)
@@ -261,7 +344,6 @@ fun DataListScreen(dataPoints: List<SensorDataPoint>) {
 @Composable
 fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
     val modelProducer = remember { ChartEntryModelProducer() }
-
     LaunchedEffect(dataPoints) {
         if (dataPoints.isNotEmpty()) {
             val windowedData = dataPoints.takeLast(100)
@@ -270,25 +352,17 @@ fun RealTimeChartScreen(dataPoints: List<SensorDataPoint>) {
             val yDataY = windowedData.map { it.values[1] }
             val yDataZ = windowedData.map { it.values[2] }
             modelProducer.setEntries(xData.zip(yDataX, ::FloatEntry), xData.zip(yDataY, ::FloatEntry), xData.zip(yDataZ, ::FloatEntry))
+        } else {
+            modelProducer.setEntries(emptyList<FloatEntry>()) // Limpa o gráfico se não houver dados
         }
     }
-
     if (dataPoints.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Aguardando dados para exibir o gráfico.") }
     } else {
-        val colorX = Color.Red
-        val colorY = Color.Green
-        val colorZ = Color.Blue
-
+        val colorX = Color.Red; val colorY = Color.Green; val colorZ = Color.Blue
         Chart(
             modifier = Modifier.fillMaxSize().padding(8.dp),
-            chart = lineChart(
-                lines = listOf(
-                    LineChart.LineSpec(lineColor = colorX.toArgb()),
-                    LineChart.LineSpec(lineColor = colorY.toArgb()),
-                    LineChart.LineSpec(lineColor = colorZ.toArgb())
-                )
-            ),
+            chart = lineChart(lines = listOf(LineChart.LineSpec(lineColor = colorX.toArgb()), LineChart.LineSpec(lineColor = colorY.toArgb()), LineChart.LineSpec(lineColor = colorZ.toArgb()))),
             chartModelProducer = modelProducer,
             startAxis = rememberStartAxis(),
             bottomAxis = rememberBottomAxis(),
