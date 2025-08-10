@@ -34,7 +34,7 @@ class SensorService : Service(), SensorEventListener {
     private var fakeDataJob: Job? = null
 
     companion object {
-        private const val USE_FAKE_DATA = true
+        private const val USE_FAKE_DATA = false
     }
 
     private val NOTIFICATION_ID = 1
