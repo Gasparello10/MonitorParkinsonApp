@@ -218,13 +218,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopSession() {
+        // 1. Manda o relógio parar de coletar dados.
         sendCommandToWatch(DataLayerConstants.STOP_COMMAND)
+
+        // 2. Envia o último lote de dados que restou no buffer.
         if (dataBuffer.isNotEmpty()) {
             sendBatchToServer(ArrayList(dataBuffer))
             dataBuffer.clear()
         }
+
+        // 3. Atualiza o estado interno do app para parar de processar novos dados.
         _isSessionActive.value = false
         currentSessionId = null
+
+        // 4. AGORA, como última ação, notifica o servidor que tudo foi encerrado.
+        _selectedPatient.value?.let { patient ->
+            val payload = JSONObject().apply {
+                put("patientId", patient.name)
+            }
+            socket?.emit("session_stopped_by_client", payload)
+            Log.d("SocketIO", "Notificação FINAL de parada enviada para o servidor para o paciente '${patient.name}'.")
+        }
     }
 
     private fun processDataPoint(dataPoint: SensorDataPoint) {
