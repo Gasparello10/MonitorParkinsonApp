@@ -108,9 +108,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setupSocketListeners() {
         socket?.on(Socket.EVENT_CONNECT) {
-            Log.d("SocketIO", "Conectado ao servidor!")
+            Log.d("SocketIO", "Conectado/Reconectado ao servidor!")
+
+            // 1. Reapresenta o paciente para aparecer na lista "Online" (isso já existia)
             _selectedPatient.value?.let { patient ->
                 socket?.emit("register_patient", JSONObject().put("patientId", patient.name))
+
+                // 2. <<< NOVO >>> Verifica se há uma sessão ativa localmente
+                if (_isSessionActive.value && currentSessionId != null) {
+                    // Se houver, informa o servidor para restaurar o estado
+                    val payload = JSONObject().apply {
+                        put("patientName", patient.name)
+                        put("sessionId", currentSessionId)
+                    }
+                    socket?.emit("resume_active_session", payload)
+                    Log.d("SocketIO", "Informando ao servidor para resumir a sessão ativa: $currentSessionId")
+                }
             }
         }
         socket?.on("start_monitoring") { args ->
