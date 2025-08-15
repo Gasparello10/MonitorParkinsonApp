@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <!-- Permissão para acordar o ecrã, caso seja necessário no futuro -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -31,6 +34,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.MonitoringService"
+            android:foregroundServiceType="dataSync" />
 
         <!-- MUDANÇA: O intent-filter foi corrigido para ouvir MESSAGE_RECEIVED -->
         <service
