@@ -119,7 +119,7 @@ class MonitoringService : Service() {
         val notification = createNotification("Coleta de dados ativa para $patientName")
         startForeground(NOTIFICATION_ID, notification)
 
-        connectToSocket()
+        //connectToSocket()
         sendCommandToWatch(DataLayerConstants.START_COMMAND)
         sendSessionStateUpdate()
         sendStatusUpdate("Sessão iniciada")
@@ -180,13 +180,25 @@ class MonitoringService : Service() {
 
     // --- Comunicação com o Servidor (Socket.IO) ---
     private fun connectToSocket() {
-        if (currentPatientName == null) return
+        if (currentPatientName == null) {
+            Log.w(TAG, "Tentativa de conectar sem um nome de paciente.")
+            return
+        }
+
         try {
             val socketUrl = BuildConfig.SERVER_URL.replace("http", "ws")
+
+            // <<< CORREÇÃO AQUI >>>
+            // 1. Sempre desconecta o socket anterior, se existir.
+            // Isso garante que uma nova seleção de paciente limpe a conexão antiga.
             socket?.disconnect()
+
+            // 2. Cria uma nova instância de socket e se conecta.
+            Log.d(TAG, "Criando nova conexão de socket para o paciente: $currentPatientName")
             socket = IO.socket(socketUrl)
             setupSocketListeners()
             socket?.connect()
+
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao conectar socket: ${e.message}")
         }

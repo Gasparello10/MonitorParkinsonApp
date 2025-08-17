@@ -86,7 +86,7 @@ class SensorService : Service(), SensorEventListener {
         fakeDataJob = GlobalScope.launch(Dispatchers.IO) {
             try {
                 // Abre o arquivo a partir da pasta res/raw
-                val inputStream = resources.openRawResource(R.raw.simulacao_20min_5hz)
+                val inputStream = resources.openRawResource(R.raw.simulacao_20min_6hz)
                 val reader = BufferedReader(InputStreamReader(inputStream))
 
                 Log.i("SensorService", "Iniciando playback de dados do recurso raw...")
