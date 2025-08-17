@@ -17,24 +17,34 @@ import androidx.core.app.NotificationCompat
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.gabriel.wear.R
+// <<< ADIÇÃO 1: Novas importações para a DataClient API >>>
+import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import com.google.gson.Gson // Adicionado para serialização em JSON
 import kotlinx.coroutines.*
 import java.io.BufferedReader
-import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
-import java.io.ObjectOutputStream
+import java.nio.charset.StandardCharsets
 
 class SensorService : Service(), SensorEventListener {
 
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
-    private val messageClient by lazy { Wearable.getMessageClient(this) }
+
+    // <<< ALTERAÇÃO 2: A messageClient não é mais necessária para o envio de dados >>>
+    // private val messageClient by lazy { Wearable.getMessageClient(this) }
     private val nodeClient by lazy { Wearable.getNodeClient(this) }
+
+    // <<< ADIÇÃO 3: Cliente para a Data API e Gson para serialização >>>
+    private val dataClient by lazy { Wearable.getDataClient(this) }
+    private val gson = Gson()
+
     private var wakeLock: PowerManager.WakeLock? = null
     private var fakeDataJob: Job? = null
 
     companion object {
-        private const val USE_FAKE_DATA = true
+        private const val USE_FAKE_DATA = false
+        private const val TAG = "SensorService" // Adicionado para logs consistentes
     }
 
     private val NOTIFICATION_ID = 1
@@ -51,12 +61,12 @@ class SensorService : Service(), SensorEventListener {
             PowerManager.PARTIAL_WAKE_LOCK,
             "MonitorParkinson::SensorWakelockTag"
         ).apply { acquire() }
-        Log.i("SensorService", "WakeLock adquirido.")
+        Log.i(TAG, "WakeLock adquirido.")
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("SensorService", "onStartCommand chamado. Modo Falso: $USE_FAKE_DATA")
+        Log.d(TAG, "onStartCommand chamado. Modo Falso: $USE_FAKE_DATA")
 
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
@@ -75,24 +85,19 @@ class SensorService : Service(), SensorEventListener {
             val SENSOR_FREQUENCY_HZ = 50
             val SENSOR_DELAY_US = 1_000_000 / SENSOR_FREQUENCY_HZ
             val success = sensorManager.registerListener(this, sensor, SENSOR_DELAY_US)
-            Log.i("SensorService", if (success) "Listener do sensor real registado" else "FALHA ao registar listener real")
+            Log.i(TAG, if (success) "Listener do sensor real registado" else "FALHA ao registar listener real")
         }
     }
 
-    // <<< FUNÇÃO MODIFICADA PARA LER DOS RECURSOS 'RAW' >>>
     private fun startFakeDataPlayback() {
         fakeDataJob?.cancel()
 
         fakeDataJob = GlobalScope.launch(Dispatchers.IO) {
             try {
-                // Abre o arquivo a partir da pasta res/raw
                 val inputStream = resources.openRawResource(R.raw.simulacao_20min_6hz)
                 val reader = BufferedReader(InputStreamReader(inputStream))
-
-                Log.i("SensorService", "Iniciando playback de dados do recurso raw...")
-
-                // Pula a primeira linha (cabeçalho)
-                reader.readLine()
+                Log.i(TAG, "Iniciando playback de dados do recurso raw...")
+                reader.readLine() // Pula cabeçalho
 
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
@@ -110,10 +115,10 @@ class SensorService : Service(), SensorEventListener {
                 }
 
                 reader.close()
-                Log.i("SensorService", "Playback do arquivo CSV concluído.")
+                Log.i(TAG, "Playback do arquivo CSV concluído.")
 
             } catch (e: Exception) {
-                Log.e("SensorService", "Erro ao ler ou processar o arquivo CSV do recurso raw", e)
+                Log.e(TAG, "Erro ao ler ou processar o arquivo CSV do recurso raw", e)
             }
         }
     }
@@ -122,19 +127,19 @@ class SensorService : Service(), SensorEventListener {
         super.onDestroy()
         if (USE_FAKE_DATA) {
             fakeDataJob?.cancel()
-            Log.i("SensorService", "Playback de dados falsos interrompido.")
+            Log.i(TAG, "Playback de dados falsos interrompido.")
         } else {
             sensorManager.unregisterListener(this)
-            Log.i("SensorService", "Listener do sensor real desregistrado.")
+            Log.i(TAG, "Listener do sensor real desregistrado.")
         }
 
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
-            Log.i("SensorService", "WakeLock liberado.")
+            Log.i(TAG, "WakeLock liberado.")
         }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Log.d("SensorService", "Serviço destruído.")
+        Log.d(TAG, "Serviço destruído.")
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -149,18 +154,25 @@ class SensorService : Service(), SensorEventListener {
         }
     }
 
+    // <<< ALTERAÇÃO 4: Função de envio completamente substituída para usar DataClient >>>
     private fun sendDataToPhone(dataPoint: SensorDataPoint) {
-        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
-            nodes.forEach { node ->
-                val stream = ByteArrayOutputStream()
-                ObjectOutputStream(stream).use { oos -> oos.writeObject(dataPoint) }
-                val data = stream.toByteArray()
-                messageClient.sendMessage(node.id, DataLayerConstants.SENSOR_DATA_PATH, data)
-                    .addOnSuccessListener { Log.d("SensorService", "Dado enviado para o nó ${node.displayName}") }
-                    .addOnFailureListener { Log.e("SensorService", "Falha ao enviar dado para o nó ${node.displayName}") }
-            }
+        // Cria um "mapa de dados" num caminho específico. Pense nisto como um ficheiro sincronizado.
+        val putDataMapRequest = PutDataMapRequest.create(DataLayerConstants.SENSOR_DATA_PATH).apply {
+            // Serializa o objeto dataPoint para uma string JSON e coloca no mapa
+            dataMap.putString(DataLayerConstants.DATA_KEY, gson.toJson(dataPoint))
+            // Adiciona um timestamp para garantir que cada DataItem seja único e acione uma atualização
+            dataMap.putLong("timestamp", System.currentTimeMillis())
         }
+
+        // Converte o mapa para uma requisição de "salvamento"
+        val request = putDataMapRequest.asPutDataRequest()
+
+        // Pede ao sistema para sincronizar este item. A entrega agora é garantida.
+        dataClient.putDataItem(request)
+            .addOnSuccessListener { Log.d(TAG, "DataItem salvo para sincronização bem-sucedido.") }
+            .addOnFailureListener { e -> Log.e(TAG, "Falha ao salvar DataItem para sincronização.", e) }
     }
+
 
     private fun createNotificationChannel() {
         val serviceChannel = NotificationChannel(
@@ -175,7 +187,7 @@ class SensorService : Service(), SensorEventListener {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Monitorização Ativa")
             .setContentText(if (USE_FAKE_DATA) "Enviando dados simulados..." else "Recolhendo dados do acelerómetro.")
-            .setSmallIcon(R.drawable.ic_notification_icon) // Lembre-se de ter este ícone
+            .setSmallIcon(R.drawable.ic_notification_icon)
             .setOngoing(true)
             .build()
     }

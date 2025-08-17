@@ -14,6 +14,8 @@ object DataLayerConstants {
 
     // Caminho para o envio dos dados do acelerômetro
     const val SENSOR_DATA_PATH = "/sensor_data"
+    const val DATA_KEY = "sensor_data_point"
+
 
     // Chaves para os dados dentro de um DataMap
     const val KEY_TIMESTAMP = "timestamp"
