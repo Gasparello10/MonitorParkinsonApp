@@ -16,7 +16,11 @@ object DataLayerConstants {
     const val SENSOR_DATA_PATH = "/sensor_data"
 
     // Chaves para os dados dentro de um DataMap
+
+    const val BATCH_SIZE = 10 // Envia a cada 50 amostras (1 segundo)
+
     const val KEY_TIMESTAMP = "timestamp"
+
     const val KEY_VALUES = "values" // Array de Floats (x, y, z)
 
     // Caminho para as mensagens de "ping" do celular para o relógio

@@ -376,7 +376,7 @@ class MonitoringService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_CHANNEL_ID = "MonitoringChannel"
 
-        private const val BATCH_SIZE = 25
+        private const val BATCH_SIZE = DataLayerConstants.BATCH_SIZE
         private const val MAX_DATA_POINTS_FOR_CHART = 100
     }
 }

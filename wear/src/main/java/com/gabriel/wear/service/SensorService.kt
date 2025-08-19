@@ -18,15 +18,17 @@ import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.gabriel.wear.R
 import com.google.android.gms.wearable.Wearable
+import com.google.gson.Gson // <<< Importação necessária para o Gson
 import kotlinx.coroutines.*
 import java.io.BufferedReader
-import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
-import java.io.ObjectOutputStream
+import java.nio.charset.StandardCharsets
 
 class SensorService : Service(), SensorEventListener {
 
     private lateinit var sensorManager: SensorManager
+    private val gson = Gson()
+    private val dataBuffer = mutableListOf<SensorDataPoint>()
     private var accelerometer: Sensor? = null
     private val messageClient by lazy { Wearable.getMessageClient(this) }
     private val nodeClient by lazy { Wearable.getNodeClient(this) }
@@ -34,7 +36,9 @@ class SensorService : Service(), SensorEventListener {
     private var fakeDataJob: Job? = null
 
     companion object {
-        private const val USE_FAKE_DATA = true
+        private const val USE_FAKE_DATA = false
+        private const val BATCH_SIZE = DataLayerConstants.BATCH_SIZE
+        private const val TAG = "SensorService"
     }
 
     private val NOTIFICATION_ID = 1
@@ -51,22 +55,19 @@ class SensorService : Service(), SensorEventListener {
             PowerManager.PARTIAL_WAKE_LOCK,
             "MonitorParkinson::SensorWakelockTag"
         ).apply { acquire() }
-        Log.i("SensorService", "WakeLock adquirido.")
+        Log.i(TAG, "WakeLock adquirido.")
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("SensorService", "onStartCommand chamado. Modo Falso: $USE_FAKE_DATA")
-
+        Log.d(TAG, "onStartCommand chamado. Modo Falso: $USE_FAKE_DATA")
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
-
         if (USE_FAKE_DATA) {
             startFakeDataPlayback()
         } else {
             startRealSensor()
         }
-
         return START_STICKY
     }
 
@@ -75,66 +76,55 @@ class SensorService : Service(), SensorEventListener {
             val SENSOR_FREQUENCY_HZ = 50
             val SENSOR_DELAY_US = 1_000_000 / SENSOR_FREQUENCY_HZ
             val success = sensorManager.registerListener(this, sensor, SENSOR_DELAY_US)
-            Log.i("SensorService", if (success) "Listener do sensor real registado" else "FALHA ao registar listener real")
+            Log.i(TAG, if (success) "Listener do sensor real registado" else "FALHA ao registar listener real")
         }
     }
 
-    // <<< FUNÇÃO MODIFICADA PARA LER DOS RECURSOS 'RAW' >>>
     private fun startFakeDataPlayback() {
         fakeDataJob?.cancel()
-
-        fakeDataJob = GlobalScope.launch(Dispatchers.IO) {
+        fakeDataJob = CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Abre o arquivo a partir da pasta res/raw
                 val inputStream = resources.openRawResource(R.raw.simulacao_20min_6hz)
                 val reader = BufferedReader(InputStreamReader(inputStream))
-
-                Log.i("SensorService", "Iniciando playback de dados do recurso raw...")
-
-                // Pula a primeira linha (cabeçalho)
-                reader.readLine()
-
+                Log.i(TAG, "Iniciando playback de dados do recurso raw...")
+                reader.readLine() // Pula cabeçalho
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
                     if (!isActive) break
-
                     val parts = line!!.split(',')
                     if (parts.size == 4) {
                         val dataPoint = SensorDataPoint(
                             timestamp = parts[0].toLong(),
                             values = floatArrayOf(parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
                         )
-                        sendDataToPhone(dataPoint)
+                        addDataToBuffer(dataPoint)
                         delay(20L) // Simula 50Hz
                     }
                 }
-
                 reader.close()
-                Log.i("SensorService", "Playback do arquivo CSV concluído.")
-
+                Log.i(TAG, "Playback do arquivo CSV concluído.")
             } catch (e: Exception) {
-                Log.e("SensorService", "Erro ao ler ou processar o arquivo CSV do recurso raw", e)
+                Log.e(TAG, "Erro ao ler ou processar o arquivo CSV do recurso raw", e)
             }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        if (dataBuffer.isNotEmpty()) {
+            sendDataToPhone(ArrayList(dataBuffer)) // Envia o resto do buffer antes de destruir
+            dataBuffer.clear()
+        }
         if (USE_FAKE_DATA) {
             fakeDataJob?.cancel()
-            Log.i("SensorService", "Playback de dados falsos interrompido.")
         } else {
             sensorManager.unregisterListener(this)
-            Log.i("SensorService", "Listener do sensor real desregistrado.")
         }
-
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
-            Log.i("SensorService", "WakeLock liberado.")
         }
-
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Log.d("SensorService", "Serviço destruído.")
+        Log.d(TAG, "Serviço destruído.")
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -145,19 +135,27 @@ class SensorService : Service(), SensorEventListener {
                 timestamp = System.currentTimeMillis(),
                 values = floatArrayOf(event.values[0], event.values[1], event.values[2])
             )
-            sendDataToPhone(dataPoint)
+            addDataToBuffer(dataPoint)
         }
     }
 
-    private fun sendDataToPhone(dataPoint: SensorDataPoint) {
+    private fun addDataToBuffer(dataPoint: SensorDataPoint) {
+        synchronized(dataBuffer) {
+            dataBuffer.add(dataPoint)
+            if (dataBuffer.size >= BATCH_SIZE) {
+                sendDataToPhone(ArrayList(dataBuffer))
+                dataBuffer.clear()
+            }
+        }
+    }
+
+    private fun sendDataToPhone(batch: List<SensorDataPoint>) {
+        val serializedBatch = gson.toJson(batch).toByteArray(StandardCharsets.UTF_8)
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
             nodes.forEach { node ->
-                val stream = ByteArrayOutputStream()
-                ObjectOutputStream(stream).use { oos -> oos.writeObject(dataPoint) }
-                val data = stream.toByteArray()
-                messageClient.sendMessage(node.id, DataLayerConstants.SENSOR_DATA_PATH, data)
-                    .addOnSuccessListener { Log.d("SensorService", "Dado enviado para o nó ${node.displayName}") }
-                    .addOnFailureListener { Log.e("SensorService", "Falha ao enviar dado para o nó ${node.displayName}") }
+                messageClient.sendMessage(node.id, DataLayerConstants.SENSOR_DATA_PATH, serializedBatch)
+                    .addOnSuccessListener { Log.d(TAG, "Lote de ${batch.size} amostras enviado para ${node.displayName}") }
+                    .addOnFailureListener { Log.e(TAG, "Falha ao enviar lote para ${node.displayName}") }
             }
         }
     }
@@ -167,15 +165,14 @@ class SensorService : Service(), SensorEventListener {
             NOTIFICATION_CHANNEL_ID, "Canal do Serviço de Sensores",
             NotificationManager.IMPORTANCE_LOW
         )
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(serviceChannel)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
     }
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Monitorização Ativa")
             .setContentText(if (USE_FAKE_DATA) "Enviando dados simulados..." else "Recolhendo dados do acelerómetro.")
-            .setSmallIcon(R.drawable.ic_notification_icon) // Lembre-se de ter este ícone
+            .setSmallIcon(R.drawable.ic_notification_icon)
             .setOngoing(true)
             .build()
     }

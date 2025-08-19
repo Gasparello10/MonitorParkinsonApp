@@ -7,7 +7,7 @@
          É seguro para desenvolvimento, mas para produção,
          você especificaria o domínio exato do seu servidor.
         -->
-        <domain includeSubdomains="true">192.168.0.11</domain>
+        <domain includeSubdomains="true">10.4.10.147</domain>
         <!-- Adicione outros IPs de desenvolvimento aqui se necessário -->
     </domain-config>
 
