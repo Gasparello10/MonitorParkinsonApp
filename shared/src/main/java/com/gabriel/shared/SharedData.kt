@@ -17,7 +17,7 @@ object DataLayerConstants {
 
     // Chaves para os dados dentro de um DataMap
 
-    const val BATCH_SIZE = 10 // Envia a cada 50 amostras (1 segundo)
+    const val BATCH_SIZE = 10
 
     const val KEY_TIMESTAMP = "timestamp"
 
