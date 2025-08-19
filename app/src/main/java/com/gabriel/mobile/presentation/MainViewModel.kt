@@ -92,6 +92,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         checkConnection()
         loadPatients()
+        viewModelScope.launch {
+            val patientList = patients.value
+            if (patientList.isNotEmpty()) {
+                selectPatient(patientList.first())
+            }
+        }
     }
 
     // --- LÓGICA DE GERENCIAMENTO DE PACIENTES (praticamente inalterada) ---

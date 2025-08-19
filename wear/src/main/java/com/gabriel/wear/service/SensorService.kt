@@ -43,7 +43,7 @@ class SensorService : Service(), SensorEventListener {
     private var fakeDataJob: Job? = null
 
     companion object {
-        private const val USE_FAKE_DATA = false
+        private const val USE_FAKE_DATA = true
         private const val TAG = "SensorService" // Adicionado para logs consistentes
     }
 
