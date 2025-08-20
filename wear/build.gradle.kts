@@ -41,6 +41,8 @@ dependencies {
     implementation(project(":shared"))
     implementation("androidx.core:core-ktx:1.10.1")
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("androidx.wear:wear-ongoing:1.0.0")
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.play.services.wearable)
     implementation(platform(libs.androidx.compose.bom))

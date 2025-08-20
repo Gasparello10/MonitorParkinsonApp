@@ -1,21 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- MUDANÇA: Declara que esta aplicação é para um relógio -->
+    <!-- Declara que esta aplicação é para um relógio -->
     <uses-feature android:name="android.hardware.type.watch" />
 
-    <!-- Permissões existentes -->
+    <!-- Permissões -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
-    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-
-
-
-
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <application
         android:allowBackup="true"
@@ -23,9 +22,11 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault">
+
         <meta-data
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
+
         <activity
             android:name=".presentation.MainActivity"
             android:exported="true"
@@ -33,7 +34,6 @@
             android:taskAffinity="">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
@@ -50,11 +50,18 @@
             </intent-filter>
         </service>
 
-        <service
+        <!--<service
             android:name=".service.SensorService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="health" />
+            android:foregroundServiceType="health" /> -->
+
+        <!-- Necessário para o WorkManager rodar em FGS no Android 14+ -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="health"
+            android:exported="false"
+            tools:node="merge" />
 
     </application>
 
