@@ -1,0 +1,181 @@
+[33mcommit 3477c37873a6bf1e66c6cfa22f80171987519c74[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Merge: 34351e7 c80ebc3
+Author: Gabriel Gasparello_ntieb <bielgasparello@gmail.com>
+Date:   Wed Aug 20 09:07:01 2025 -0300
+
+    Merge branch 'implementacao_controle_bateria'
+
+[33mcommit c80ebc3b90d95c27d073642e4ec60fd6bc8997cb[m[33m ([m[1;31morigin/Implementaçã_controle-de-bateria[m[33m)[m
+Author: Gabriel Gasparello_ntieb <bielgasparello@gmail.com>
+Date:   Wed Aug 20 09:00:42 2025 -0300
+
+    Melhoria: Tela apagando e monitoramento continua
+
+[33mcommit 34351e74f2c2766dbfb14bd5fafa45e0fd391c46[m
+Author: Gabriel Gasparello_ntieb <bielgasparello@gmail.com>
+Date:   Tue Aug 19 09:53:03 2025 -0300
+
+    tentativa_controle_pacientes_web
+
+[33mcommit abd4d18ccb4b1d444047d8ce8be9e37ce368d459[m
+Author: Gabriel Gasparello_ntieb <bielgasparello@gmail.com>
+Date:   Tue Aug 19 08:50:32 2025 -0300
+
+    Batching no MessageClient
+
+[33mcommit 98d525bcd9d661c4dbeb81e6a5eefc1db5a94be3[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Sat Aug 16 21:09:50 2025 -0300
+
+    pre tentativa Dataclient
+
+[33mcommit f3a0337a596671f4a40b6c5b4461fbde54e40475[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Fri Aug 15 14:39:18 2025 -0300
+
+    ForegroundService do celular
+
+[33mcommit f1f9ebc9f4ed95af8df7a63492a3a334b08909e0[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Thu Aug 14 09:00:34 2025 -0300
+
+    Reconexão com servidor
+
+[33mcommit aa783ffffd1ccd797c57cbdd4f07e7c1b4f9dfd7[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Aug 13 19:24:16 2025 -0300
+
+    Parada de sessoes ativas pelo app
+
+[33mcommit 1f1ad05cf214e1359269241d027701e9dd5916ac[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Sun Aug 10 20:16:04 2025 -0300
+
+    leitura de dados falsos- funcionando
+
+[33mcommit 8e9054afa2e6bfe99f24d4d7499177ef400bb7da[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Sat Aug 9 10:33:37 2025 -0300
+
+    leitura de dados falsos
+
+[33mcommit d3b921196a0cb55c74a9a4c49ad12648beeededa[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Thu Aug 7 10:49:33 2025 -0300
+
+    Exclusao de pacientes e atualização de banco de dados- completamente funcional
+
+[33mcommit 70f9a4f6f03964cdbfd621b70e49dc60f6dab816[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Thu Aug 7 10:14:18 2025 -0300
+
+    Exclusao de pacientes e atualização de banco de dados
+
+[33mcommit fc19242fdce49aff7dbca2e102744af3d356e4d9[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Tue Aug 5 22:25:39 2025 -0300
+
+    Gestao de pacientes
+
+[33mcommit fccd66f966669aee509d615cd7c308a3b3e0053f[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Mon Aug 4 14:35:59 2025 -0300
+
+    Servidor-ok,- graficos coloridos responsivos
+
+[33mcommit 0e4714120be644666328bff1ff6a264eded3c4ad[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Mon Aug 4 14:07:57 2025 -0300
+
+    Servidor-ok, servidor responsivo- graficos coloridos
+
+[33mcommit db51a9540ece8dc4df3173093d9fe4c66e50ed8e[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Mon Aug 4 12:15:49 2025 -0300
+
+    Servidor-ok, servidor responsivo
+
+[33mcommit 75750bc4a0777dd4ebbdb9999c6f2ec25552d506[m
+Merge: 7cbf639 2a06388
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Sun Aug 3 15:43:34 2025 -0300
+
+    Merge remote-tracking branch 'origin/main'
+
+[33mcommit 7cbf63992013995d5abc64453a02f5fd894cca41[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Sun Aug 3 15:42:26 2025 -0300
+
+    Servidor-ok, Alteração simplificada de IP
+
+[33mcommit 2a063886a567312845509e801c17fd2cc81e8458[m
+Author: Gasparello10 <148151124+Gasparello10@users.noreply.github.com>
+Date:   Thu Jul 31 15:20:44 2025 -0300
+
+    Servidor funcionando
+
+[33mcommit 8a7ea72630c70a21d4abe6518a2171dd58693005[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Thu Jul 31 11:41:55 2025 -0300
+
+    Servidor-ok
+
+[33mcommit 53b53e21ee7dbf840c7d517ddbefcd5287ef5a10[m[33m ([m[1;31morigin/Atualização_Graficos[m[33m)[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Thu Jul 31 09:55:10 2025 -0300
+
+    FUNCIONANDO-Graficos-CSV-STATUS
+
+[33mcommit 9b040d643e5223fcfee80378f83c2cd6e12666ad[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 23:14:16 2025 -0300
+
+    FUNCIONANDO-Graficos-CSV
+
+[33mcommit 49a64f70b4ee727e14007fa885251e9b9e460656[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 22:49:03 2025 -0300
+
+    FUNCIONANDO-Graficos-CSV
+
+[33mcommit afab13e405c131e8331292e86d52563c0dbe381c[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 22:47:14 2025 -0300
+
+    FUNCIONANDO-Graficos-CSV
+
+[33mcommit b0d7fcdefff56c4595f3036b5e2e7a401be8c223[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 22:44:00 2025 -0300
+
+    FUNCIONANDO-Graficos
+
+[33mcommit 1e9d935c0679f55342c358c852bb035bdbc31658[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 22:27:03 2025 -0300
+
+    FUNCIONAL
+
+[33mcommit 3f1d065bfc8e40f20e7427e82277193314208113[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 21:36:20 2025 -0300
+
+    Aparentemente funcional
+
+[33mcommit fb00ac84f8627fd44003f76b200e817a9e73d834[m[33m ([m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmaster[m[33m)[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Wed Jul 30 17:34:12 2025 -0300
+
+    Tela funcionando, conexao ok, botoes ok
+
+[33mcommit 10b0450dac558d06a49896a9691937f9b49dba43[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Fri Jul 25 17:44:39 2025 -0300
+
+    Tela funcionando, conexao ok, botoes ok
+
+[33mcommit 083a0cc0d2010b2da10abf77ff0fe44f39439ca9[m
+Author: Gabriel <gabrielgasparello@poli.ufrj.br>
+Date:   Fri Jul 25 16:55:37 2025 -0300
+
+    Initial commit
