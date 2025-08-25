@@ -89,6 +89,12 @@ class MonitoringService : Service() {
                     connectToSocket()
                 }
             }
+            ACTION_REQUEST_START_SESSION -> {
+                val patientName = intent.getStringExtra(EXTRA_PATIENT_NAME)
+                if (patientName != null && !isSessionActive) {
+                    requestStartSessionOnServer(patientName)
+                }
+            }
             ACTION_START -> {
                 val patientName = intent.getStringExtra(EXTRA_PATIENT_NAME)
                 val sessionId = intent.getIntExtra(EXTRA_SESSION_ID, -1)
@@ -253,6 +259,34 @@ class MonitoringService : Service() {
         socket?.off()
     }
 
+    private fun requestStartSessionOnServer(patientName: String) {
+        serviceScope.launch {
+            try {
+                val serverUrl = "${BuildConfig.SERVER_URL}/api/start_session"
+                val jsonObject = JSONObject().apply {
+                    put("patientId", patientName)
+                }
+                val requestBody = jsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = Request.Builder().url(serverUrl).post(requestBody).build()
+
+                networkClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "Requisição para iniciar sessão enviada com sucesso para o servidor.")
+                        // O servidor agora vai responder com um evento WebSocket 'start_monitoring',
+                        // que o nosso serviço já sabe como manipular. Não precisamos fazer mais nada aqui.
+                    } else {
+                        Log.e(TAG, "Falha ao requisitar início de sessão: ${response.code} ${response.message}")
+                        // Opcional: Enviar um broadcast para a UI informando o erro.
+                        sendStatusUpdate("Erro ao iniciar sessão")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro de rede ao requisitar início de sessão", e)
+                sendStatusUpdate("Erro de rede")
+            }
+        }
+    }
+
     private fun sendBatchToServer(batch: List<SensorDataPoint>) {
         val patientId = currentPatientName ?: return
         val sessionId = currentSessionId ?: return
@@ -360,6 +394,7 @@ class MonitoringService : Service() {
         const val ACTION_STOP = "ACTION_STOP"
 
         const val ACTION_CONNECT = "ACTION_CONNECT"
+        const val ACTION_REQUEST_START_SESSION = "ACTION_REQUEST_START_SESSION"
 
         const val EXTRA_PATIENT_NAME = "EXTRA_PATIENT_NAME"
         const val EXTRA_SESSION_ID = "EXTRA_SESSION_ID"

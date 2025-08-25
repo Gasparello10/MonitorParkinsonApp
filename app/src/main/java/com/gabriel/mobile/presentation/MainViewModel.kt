@@ -28,10 +28,6 @@ data class Patient(val id: String = UUID.randomUUID().toString(), val name: Stri
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    // --- LÓGICA ANTIGA REMOVIDA ---
-    // A lógica de Socket.IO, networkClient, dataBuffer, etc., foi movida para o MonitoringService.
-
-    // --- PROPRIEDADES QUE PERMANECEM ---
     private val gson = Gson()
     private val sharedPreferences = application.getSharedPreferences("patient_prefs", Context.MODE_PRIVATE)
     private val nodeClient by lazy { Wearable.getNodeClient(application) }
@@ -60,7 +56,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
     val sensorDataPoints = _sensorDataPoints.asStateFlow()
 
-    // --- NOVO BROADCAST RECEIVER PARA OUVIR ATUALIZAÇÕES DO SERVIÇO ---
     private val serviceUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -82,7 +77,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
-        // Registra o novo receiver para ouvir o serviço
         val intentFilter = IntentFilter().apply {
             addAction(MonitoringService.ACTION_STATUS_UPDATE)
             addAction(MonitoringService.ACTION_SESSION_STATE_UPDATE)
@@ -94,7 +88,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadPatients()
     }
 
-    // --- LÓGICA DE GERENCIAMENTO DE PACIENTES (praticamente inalterada) ---
     fun addPatient(name: String) {
         val newPatient = Patient(name = name)
         val updatedList = _patients.value + newPatient
@@ -104,9 +97,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectPatient(patient: Patient) {
         _selectedPatient.value = patient
-
-        // <<< ADIÇÃO CRÍTICA AQUI >>>
-        // Envia um comando para o serviço iniciar a conexão de rede.
         val serviceIntent = Intent(getApplication(), MonitoringService::class.java).apply {
             action = MonitoringService.ACTION_CONNECT
             putExtra(MonitoringService.EXTRA_PATIENT_NAME, patient.name)
@@ -116,7 +106,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteSelectedPatients() {
-        // ... (código existente sem alterações)
         val selection = _selectedForDeletion.value
         if (selection.isEmpty()) {
             exitSelectionMode()
@@ -124,7 +113,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (_selectedPatient.value != null && selection.contains(_selectedPatient.value!!.id)) {
             if (_isSessionActive.value) {
-                stopSession() // Para a sessão se o paciente selecionado for excluído
+                stopSession()
             }
             _selectedPatient.value = null
         }
@@ -134,7 +123,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         exitSelectionMode()
     }
 
-    // ... (outras funções de seleção permanecem as mesmas)
     fun enterSelectionMode(initialPatientId: String) {
         _isInSelectionMode.value = true
         _selectedForDeletion.value = setOf(initialPatientId)
@@ -155,17 +143,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedForDeletion.value = emptySet()
     }
 
-    // --- NOVAS FUNÇÕES PARA CONTROLAR O SERVIÇO ---
-    fun startSession(sessionId: Int) {
-        val patient = _selectedPatient.value ?: return
-        Log.d("MainViewModel", "Iniciando o MonitoringService para a sessão $sessionId")
+    // <<< FUNÇÃO REMOVIDA >>>
+    // A função startSession(sessionId: Int) foi removida pois o serviço agora lida com o início internamente.
+
+    // <<< FUNÇÃO ADICIONADA >>>
+    /**
+     * Pede ao MonitoringService para iniciar o processo de começo de uma nova sessão.
+     * O serviço irá contatar o servidor, que por sua vez criará a sessão e responderá
+     * com um comando para iniciar o monitoramento de fato.
+     */
+    fun requestStartSession() {
+        val patient = _selectedPatient.value
+        if (patient == null) {
+            Log.w("MainViewModel", "Tentativa de iniciar sessão sem paciente selecionado.")
+            return
+        }
+        Log.d("MainViewModel", "Requisitando início de sessão para ${patient.name}")
 
         val serviceIntent = Intent(getApplication(), MonitoringService::class.java).apply {
-            action = MonitoringService.ACTION_START
+            action = MonitoringService.ACTION_REQUEST_START_SESSION
             putExtra(MonitoringService.EXTRA_PATIENT_NAME, patient.name)
-            putExtra(MonitoringService.EXTRA_SESSION_ID, sessionId)
         }
-        ContextCompat.startForegroundService(getApplication(), serviceIntent)
+        getApplication<Application>().startService(serviceIntent)
     }
 
     fun stopSession() {
@@ -175,12 +174,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         getApplication<Application>().startService(serviceIntent)
     }
-
-    // --- FUNÇÕES QUE FORAM MOVIDAS OU REMOVIDAS ---
-    // processDataPoint(), connectToSocket(), disconnectFromSocket(), setupSocketListeners(), sendBatchToServer()
-    // foram todos movidos para o MonitoringService.
-
-    // sendCommandToWatch() foi removido pois o serviço irá controlá-lo.
 
     private fun savePatients(patients: List<Patient>) {
         val json = gson.toJson(patients)
@@ -203,7 +196,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        // Desregistra o receiver quando o ViewModel é destruído.
         LocalBroadcastManager.getInstance(getApplication()).unregisterReceiver(serviceUpdateReceiver)
     }
 }

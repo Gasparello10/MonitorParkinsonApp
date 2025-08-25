@@ -164,20 +164,26 @@ fun PatientManagementScreen(viewModel: MainViewModel) {
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            // <<< ALTERAÇÃO PRINCIPAL AQUI >>>
             if (selectedPatient != null && !isInSelectionMode) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Text("Paciente Selecionado:", style = MaterialTheme.typography.titleMedium)
                         Text(selectedPatient!!.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Este paciente está online. A sessão deve ser iniciada e parada através do dashboard web.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = TextAlign.Center
-                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        // Substituímos o texto antigo pelo botão de Iniciar Sessão
+                        Button(
+                            onClick = { viewModel.requestStartSession() },
+                            enabled = isConnected // O botão só fica ativo se o relógio estiver conectado
+                        ) {
+                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Iniciar Sessão")
+                        }
                     }
                 }
             } else if (!isInSelectionMode) {
@@ -290,7 +296,6 @@ fun AddPatientDialog(onDismiss: () -> Unit, onAddPatient: (String) -> Unit) {
         }
     }
 }
-
 @Composable
 fun MonitoringScreen(viewModel: MainViewModel) {
     val status by viewModel.status.collectAsState()
@@ -298,12 +303,21 @@ fun MonitoringScreen(viewModel: MainViewModel) {
     val isConnected by viewModel.isConnected.collectAsState()
     var selectedTabIndex by remember { mutableStateOf(0) }
     val tabs = listOf("Dados", "Gráfico")
+
     Scaffold(topBar = {
         Column(modifier = Modifier.fillMaxWidth()) {
-            MonitoringTopBar(status = status, isConnected = isConnected, onStopSession = { viewModel.stopSession() })
+
+            MonitoringTopBar(
+                status = status,
+                isConnected = isConnected,
+                onStopSession = { viewModel.stopSession() }
+            )
             TabRow(selectedTabIndex = selectedTabIndex) {
                 tabs.forEachIndexed { index, title ->
-                    Tab(selected = selectedTabIndex == index, onClick = { selectedTabIndex = index }, text = { Text(title) })
+                    Tab(
+                        selected = selectedTabIndex == index,
+                        onClick = { selectedTabIndex = index },
+                        text = { Text(title) })
                 }
             }
         }
@@ -318,13 +332,34 @@ fun MonitoringScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-fun MonitoringTopBar(status: String, isConnected: Boolean, onStopSession: () -> Unit) {
+fun MonitoringTopBar(
+    status: String,
+    isConnected: Boolean,
+    onStopSession: () -> Unit
+) {
     Column(modifier = Modifier.padding(16.dp)) {
-        Text(text = "Monitoramento Ativo", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text(text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado", style = MaterialTheme.typography.bodyLarge, color = if (isConnected) Color(0xFF4CAF50) else Color.Red)
-        Text(text = "Status: $status", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+        Text(
+            text = "Monitoramento Ativo", // O texto agora é fixo
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (isConnected) Color(0xFF4CAF50) else Color.Red
+        )
+        Text(
+            text = "Status: $status",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.secondary
+        )
         Spacer(modifier = Modifier.height(8.dp))
-        Button(onClick = onStopSession, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+
+        // Agora só existe o botão de parar, sem 'if/else'
+        Button(
+            onClick = onStopSession,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+        ) {
             Text("Parar Sessão")
         }
     }
