@@ -301,15 +301,23 @@ fun MonitoringScreen(viewModel: MainViewModel) {
     val status by viewModel.status.collectAsState()
     val dataPoints by viewModel.sensorDataPoints.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
+
+    // <<< NOVO: Coleta os estados necessários que estavam faltando >>>
+    val isSessionActive by viewModel.isSessionActive.collectAsState()
+    val batteryLevel by viewModel.watchBatteryLevel.collectAsState()
+
     var selectedTabIndex by remember { mutableStateOf(0) }
     val tabs = listOf("Dados", "Gráfico")
 
     Scaffold(topBar = {
         Column(modifier = Modifier.fillMaxWidth()) {
-
+            // <<< ALTERAÇÃO: A chamada para MonitoringTopBar agora inclui todos os parâmetros >>>
             MonitoringTopBar(
                 status = status,
                 isConnected = isConnected,
+                isSessionActive = isSessionActive,
+                batteryLevel = batteryLevel,
+                onStartSession = { viewModel.requestStartSession() },
                 onStopSession = { viewModel.stopSession() }
             )
             TabRow(selectedTabIndex = selectedTabIndex) {
@@ -335,19 +343,34 @@ fun MonitoringScreen(viewModel: MainViewModel) {
 fun MonitoringTopBar(
     status: String,
     isConnected: Boolean,
+    isSessionActive: Boolean,
+    batteryLevel: Int?, // <<< NOVO: Parâmetro para receber o nível da bateria
+    onStartSession: () -> Unit,
     onStopSession: () -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
-            text = "Monitoramento Ativo", // O texto agora é fixo
+            text = if (isSessionActive) "Monitoramento Ativo" else "Pronto para Iniciar",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
-        Text(
-            text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (isConnected) Color(0xFF4CAF50) else Color.Red
-        )
+        // <<< ALTERAÇÃO: Usando uma Row para alinhar o status e a bateria >>>
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (isConnected) "Relógio Conectado" else "Relógio Desconectado",
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (isConnected) Color(0xFF4CAF50) else Color.Red
+            )
+            // <<< NOVO: Exibe o nível da bateria se estiver conectado e disponível >>>
+            if (isConnected && batteryLevel != null) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "🔋 $batteryLevel%",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+        }
         Text(
             text = "Status: $status",
             style = MaterialTheme.typography.bodyMedium,
@@ -355,16 +378,23 @@ fun MonitoringTopBar(
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Agora só existe o botão de parar, sem 'if/else'
-        Button(
-            onClick = onStopSession,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-        ) {
-            Text("Parar Sessão")
+        if (isSessionActive) {
+            Button(
+                onClick = onStopSession,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Parar Sessão")
+            }
+        } else {
+            Button(
+                onClick = onStartSession,
+                enabled = isConnected
+            ) {
+                Text("Iniciar Sessão")
+            }
         }
     }
 }
-
 @Composable
 fun DataListScreen(dataPoints: List<SensorDataPoint>) {
     if (dataPoints.isEmpty()) {

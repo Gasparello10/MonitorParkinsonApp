@@ -5,15 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.util.Log
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
-import com.gabriel.mobile.service.DataLayerListenerService
 import com.gabriel.mobile.service.MonitoringService
-import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
@@ -21,7 +16,6 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class Patient(val id: String = UUID.randomUUID().toString(), val name: String)
@@ -56,6 +50,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sensorDataPoints = MutableStateFlow<List<SensorDataPoint>>(emptyList())
     val sensorDataPoints = _sensorDataPoints.asStateFlow()
 
+    // <<< NOVO: StateFlow para o nível da bateria do relógio >>>
+    private val _watchBatteryLevel = MutableStateFlow<Int?>(null)
+    val watchBatteryLevel = _watchBatteryLevel.asStateFlow()
+
+
     private val serviceUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -72,6 +71,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _sensorDataPoints.value = gson.fromJson(dataPointsJson, type)
                     }
                 }
+                // <<< NOVO: Case para receber a atualização de bateria do serviço >>>
+                MonitoringService.ACTION_WATCH_STATUS_UPDATE -> {
+                    val batteryLevel = intent.getIntExtra(MonitoringService.EXTRA_BATTERY_LEVEL, -1)
+                    if (batteryLevel != -1) {
+                        _watchBatteryLevel.value = batteryLevel
+                    }
+                }
             }
         }
     }
@@ -81,6 +87,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             addAction(MonitoringService.ACTION_STATUS_UPDATE)
             addAction(MonitoringService.ACTION_SESSION_STATE_UPDATE)
             addAction(MonitoringService.ACTION_NEW_DATA_UPDATE)
+            // <<< NOVO: Registra interesse na ação de atualização de bateria >>>
+            addAction(MonitoringService.ACTION_WATCH_STATUS_UPDATE)
         }
         LocalBroadcastManager.getInstance(application).registerReceiver(serviceUpdateReceiver, intentFilter)
 
@@ -102,7 +110,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(MonitoringService.EXTRA_PATIENT_NAME, patient.name)
         }
         getApplication<Application>().startService(serviceIntent)
-        Log.d("ViewModel_DEBUG", "Comando ACTION_CONNECT enviado para o serviço para o paciente ${patient.name}")
+        Log.d("ViewModel_DEBUG", "Comando ACTION_SET_PATIENT enviado para o serviço para o paciente ${patient.name}")
     }
 
     fun deleteSelectedPatients() {
@@ -143,15 +151,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedForDeletion.value = emptySet()
     }
 
-    // <<< FUNÇÃO REMOVIDA >>>
-    // A função startSession(sessionId: Int) foi removida pois o serviço agora lida com o início internamente.
-
-    // <<< FUNÇÃO ADICIONADA >>>
-    /**
-     * Pede ao MonitoringService para iniciar o processo de começo de uma nova sessão.
-     * O serviço irá contatar o servidor, que por sua vez criará a sessão e responderá
-     * com um comando para iniciar o monitoramento de fato.
-     */
     fun requestStartSession() {
         val patient = _selectedPatient.value
         if (patient == null) {
@@ -168,6 +167,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopSession() {
+        if (!_isSessionActive.value) {
+            Log.w("MainViewModel", "Comando stopSession ignorado, pois a sessão não está ativa.")
+            return
+        }
+
         Log.d("MainViewModel", "Enviando comando para parar o MonitoringService")
         val serviceIntent = Intent(getApplication(), MonitoringService::class.java).apply {
             action = MonitoringService.ACTION_STOP

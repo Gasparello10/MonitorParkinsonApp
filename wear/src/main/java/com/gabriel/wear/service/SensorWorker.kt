@@ -1,47 +1,52 @@
 package com.gabriel.wear.service
 
+// <<< MUDANÇA 1: Importações adicionadas para o DataClient >>>
+
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.wear.ongoing.OngoingActivity
+import androidx.wear.ongoing.Status
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import androidx.wear.ongoing.OngoingActivity
-import androidx.wear.ongoing.Status
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.gabriel.wear.R
 import com.gabriel.wear.presentation.MainActivity
-// <<< MUDANÇA 1: Importações adicionadas para o DataClient >>>
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
-import java.nio.charset.StandardCharsets
-import kotlinx.coroutines.channels.awaitClose
 
 class SensorWorker(
     private val context: Context,
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
+
+    private var lastBatterySendTime = 0L
+    private val batterySendInterval = 30000L // 30 segundos em milissegundos
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     // <<< MUDANÇA 2: Trocamos MessageClient por DataClient >>>
@@ -155,8 +160,37 @@ class SensorWorker(
         } catch (e: Exception) {
             Log.e(TAG, "Falha ao enviar lote de dados para o Data Layer", e)
         }
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastBatterySendTime > batterySendInterval) {
+            sendBatteryLevel()
+            lastBatterySendTime = currentTime
+        }
     }
 
+    private suspend fun sendBatteryLevel() {
+        val batteryIntent: Intent? = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level: Int = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale: Int = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+
+        if (level == -1 || scale == -1) {
+            Log.e(TAG, "Não foi possível obter o nível da bateria.")
+            return
+        }
+
+        val batteryPct = (level / scale.toFloat() * 100).toInt()
+
+        try {
+            val uniquePath = "${DataLayerConstants.BATTERY_PATH}/${System.currentTimeMillis()}"
+
+            val putDataMapRequest = PutDataMapRequest.create(uniquePath)
+            putDataMapRequest.dataMap.putInt(DataLayerConstants.BATTERY_KEY, batteryPct)
+            val putDataRequest = putDataMapRequest.asPutDataRequest().setUrgent()
+            dataClient.putDataItem(putDataRequest).await()
+            Log.d(TAG, "Nível da bateria ($batteryPct%) enviado para o celular.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao enviar o nível da bateria", e)
+        }
+    }
 
     private fun createForegroundInfo(): ForegroundInfo {
         val touchIntent = Intent(context, MainActivity::class.java)

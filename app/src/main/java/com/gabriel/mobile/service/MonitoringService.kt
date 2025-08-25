@@ -34,8 +34,11 @@ import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MonitoringService : Service() {
+
+    private var currentWatchBatteryLevel: Int? = null
 
     // Coroutine scope para o serviço
     private val serviceJob = SupervisorJob()
@@ -57,6 +60,20 @@ class MonitoringService : Service() {
     private val dataQueue = ArrayDeque<SensorDataPoint>(MAX_DATA_POINTS_FOR_CHART)
     private var statusUpdateJob: Job? = null
 
+    private val batteryDataReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == DataLayerListenerService.ACTION_RECEIVE_BATTERY_DATA) {
+                val level = intent.getIntExtra(DataLayerListenerService.EXTRA_BATTERY_LEVEL, -1)
+                if (level != -1) {
+                    Log.d("BatteryDebug", "2. MonitoringService: Broadcast de bateria recebido! Nível: $level")
+                    currentWatchBatteryLevel = level
+                    // Envia a atualização para o servidor
+                    sendWatchStatusToServer()
+                }
+            }
+        }
+    }
+
     // BroadcastReceiver para dados do relógio
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -77,6 +94,9 @@ class MonitoringService : Service() {
         createNotificationChannel()
         val intentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_SENSOR_DATA)
         LocalBroadcastManager.getInstance(this).registerReceiver(sensorDataReceiver, intentFilter)
+
+        val batteryIntentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_BATTERY_DATA)
+        LocalBroadcastManager.getInstance(this).registerReceiver(batteryDataReceiver, batteryIntentFilter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -132,6 +152,7 @@ class MonitoringService : Service() {
     }
 
     private fun stopMonitoring() {
+
         if (!isSessionActive) return
         Log.d(TAG, "Parando monitoramento da sessão.")
 
@@ -215,6 +236,7 @@ class MonitoringService : Service() {
             Log.d(TAG, "Socket conectado!")
             currentPatientName?.let { name ->
                 socket?.emit("register_patient", JSONObject().put("patientId", name))
+                sendWatchStatusToServer()
                 if(isSessionActive && currentSessionId != null) {
                     val payload = JSONObject().apply {
                         put("patientName", name)
@@ -225,7 +247,6 @@ class MonitoringService : Service() {
             }
         }
 
-        // <<< CORREÇÃO AQUI: Adicionados os listeners para comandos do servidor >>>
         socket?.on("start_monitoring") { args ->
             try {
                 val data = args[0] as JSONObject
@@ -257,6 +278,23 @@ class MonitoringService : Service() {
     private fun disconnectFromSocket() {
         socket?.disconnect()
         socket?.off()
+    }
+
+    private fun sendWatchStatusToServer() {
+        val patient = currentPatientName ?: return
+        val battery = currentWatchBatteryLevel ?: return
+        Log.d("BatteryDebug", "3. MonitoringService: Enviando status para o servidor (Bateria: $battery%)")
+        val payload = JSONObject().apply {
+            put("patientId", patient)
+            put("batteryLevel", battery)
+        }
+        socket?.emit("watch_status_update", payload)
+        Log.d(TAG, "Enviando status do relógio para o servidor: Bateria $battery%")
+
+        val intent = Intent(ACTION_WATCH_STATUS_UPDATE).apply {
+            putExtra(EXTRA_BATTERY_LEVEL, battery)
+        }
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 
     private fun requestStartSessionOnServer(patientName: String) {
@@ -365,19 +403,18 @@ class MonitoringService : Service() {
         Log.d(TAG, "Serviço destruído.")
         serviceJob.cancel() // Cancela todas as coroutines
         LocalBroadcastManager.getInstance(this).unregisterReceiver(sensorDataReceiver)
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(batteryDataReceiver)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Canal de Monitoramento",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
-        }
+        val serviceChannel = NotificationChannel(
+            NOTIFICATION_CHANNEL_ID,
+            "Canal de Monitoramento",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
     }
 
     private fun createNotification(contentText: String) =
@@ -389,6 +426,9 @@ class MonitoringService : Service() {
             .build()
 
     companion object {
+
+        const val ACTION_WATCH_STATUS_UPDATE = "ACTION_WATCH_STATUS_UPDATE"
+        const val EXTRA_BATTERY_LEVEL = "EXTRA_BATTERY_LEVEL"
         private const val TAG = "MonitoringService"
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"

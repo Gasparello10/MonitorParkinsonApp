@@ -18,43 +18,68 @@ class DataLayerListenerService : WearableListenerService() {
     private val gson = Gson()
 
     companion object {
+
+        const val ACTION_RECEIVE_BATTERY_DATA = "com.gabriel.mobile.RECEIVE_BATTERY_DATA"
+        const val EXTRA_BATTERY_LEVEL = "extra_battery_level"
         const val ACTION_RECEIVE_SENSOR_DATA = "com.gabriel.mobile.RECEIVE_SENSOR_DATA"
         const val EXTRA_SENSOR_DATA = "extra_sensor_data"
         private const val TAG = "DataLayerListener"
+
         // <<< MUDANÇA 2: Chave correspondente à do relógio >>>
         private const val DATA_KEY_SENSOR_BATCH = "sensor_batch_data"
     }
 
-    // <<< MUDANÇA 3: A lógica foi movida de onMessageReceived para onDataChanged >>>
     override fun onDataChanged(dataEvents: DataEventBuffer) {
         super.onDataChanged(dataEvents)
-        Log.d(TAG, "onDataChanged acionado. Eventos recebidos: ${dataEvents.count}")
 
         dataEvents.forEach { event ->
-            // Verificamos se o evento é uma alteração de dados e se o caminho corresponde ao que esperamos
-            // <<< SUA CORREÇÃO - EXCELENTE! >>>
-            if (event.type == DataEvent.TYPE_CHANGED && event.dataItem.uri.path?.startsWith(DataLayerConstants.SENSOR_DATA_PATH) == true) {
-                try {
-                    val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
-                    val jsonString = dataMap.getString(DATA_KEY_SENSOR_BATCH)
 
-                    // <<< NOVA CORREÇÃO AQUI >>>
-                    // Só executa o código se jsonString não for nulo.
-                    jsonString?.let { nonNullJsonString ->
-                        val typeToken = object : TypeToken<List<SensorDataPoint>>() {}.type
-                        val dataPoints = gson.fromJson<List<SensorDataPoint>>(nonNullJsonString, typeToken)
+            if (event.type == DataEvent.TYPE_CHANGED) {
+                when {
+                    event.dataItem.uri.path?.startsWith(DataLayerConstants.SENSOR_DATA_PATH) == true -> {
+                        try {
+                            val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
+                            val jsonString = dataMap.getString(DATA_KEY_SENSOR_BATCH)
 
-                        Log.d(TAG, "Lote de ${dataPoints.size} amostras recebido do relógio via DataClient!")
-
-                        dataPoints.forEach { dataPoint ->
-                            val intent = Intent(ACTION_RECEIVE_SENSOR_DATA).apply {
-                                putExtra(EXTRA_SENSOR_DATA, dataPoint)
+                            jsonString?.let { nonNullJsonString ->
+                                val typeToken = object : TypeToken<List<SensorDataPoint>>() {}.type
+                                val dataPoints = gson.fromJson<List<SensorDataPoint>>(
+                                    nonNullJsonString,
+                                    typeToken
+                                )
+                                Log.d(
+                                    TAG,
+                                    "Lote de ${dataPoints.size} amostras recebido do relógio!"
+                                )
+                                dataPoints.forEach { dataPoint ->
+                                    val intent = Intent(ACTION_RECEIVE_SENSOR_DATA).apply {
+                                        putExtra(EXTRA_SENSOR_DATA, dataPoint)
+                                    }
+                                    LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+                                }
                             }
-                            LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Erro ao desserializar o lote de dados do sensor", e)
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Erro ao desserializar o lote de dados do sensor via DataClient", e)
+
+                    // <<< ALTERAÇÃO AQUI: De '.equals' para '.startsWith' >>>
+                    event.dataItem.uri.path?.startsWith(DataLayerConstants.BATTERY_PATH) == true -> {
+                        try {
+                            val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
+                            val batteryLevel = dataMap.getInt(DataLayerConstants.BATTERY_KEY, -1)
+
+                            if (batteryLevel != -1) {
+                                Log.d(TAG, "Nível da bateria recebido do relógio: $batteryLevel%")
+                                val intent = Intent(ACTION_RECEIVE_BATTERY_DATA).apply {
+                                    putExtra(EXTRA_BATTERY_LEVEL, batteryLevel)
+                                }
+                                LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Erro ao receber dados da bateria", e)
+                        }
+                    }
                 }
             }
         }
