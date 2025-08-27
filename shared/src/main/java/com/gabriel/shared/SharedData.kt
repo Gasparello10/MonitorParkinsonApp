@@ -15,7 +15,7 @@ object DataLayerConstants {
     const val STOP_COMMAND = "stop"
     // Caminho para o envio dos dados do acelerômetro
     const val SENSOR_DATA_PATH = "/sensor_data"
-    const val BATCH_SIZE = 20 // Envia a cada 50 amostras (1 segundo)
+    const val BATCH_SIZE = 30
     const val KEY_TIMESTAMP = "timestamp"
 
     const val KEY_VALUES = "values" // Array de Floats (x, y, z)
