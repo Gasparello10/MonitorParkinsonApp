@@ -124,7 +124,7 @@ class SensorWorker(
                 override fun onAccuracyChanged(s: Sensor?, a: Int) {}
             }
             Log.d(TAG, "Registrando listener do sensor real.")
-            sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(listener, accelerometer, 40000)
             awaitClose {
                 Log.d(TAG, "Cancelando listener do sensor real.")
                 sensorManager.unregisterListener(listener)
