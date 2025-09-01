@@ -11,8 +11,19 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.gabriel.mobile.BuildConfig
 import com.gabriel.mobile.R
+import com.gabriel.mobile.data.SensorDataRepository
+import com.gabriel.mobile.data.local.AppDatabase
+import com.gabriel.mobile.data.local.SensorDataBatch
+import com.gabriel.mobile.worker.UploadWorker
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
 import com.google.android.gms.wearable.Wearable
@@ -32,59 +43,63 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
-import androidx.core.content.ContextCompat
-import androidx.localbroadcastmanager.content.LocalBroadcastManager
-import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.ArrayList
 
 class MonitoringService : Service() {
 
     private var currentWatchBatteryLevel: Int? = null
-
-    // Coroutine scope para o serviço
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
-
-    // Clientes e utilitários
     private val messageClient by lazy { Wearable.getMessageClient(this) }
     private val networkClient = OkHttpClient()
     private val gson = Gson()
     private var socket: Socket? = null
-
-    // Estado da sessão
     private var isSessionActive = false
     private var currentPatientName: String? = null
     private var currentSessionId: Int? = null
 
-    // Buffers de dados
-    private val dataBuffer = mutableListOf<SensorDataPoint>()
     private val dataQueue = ArrayDeque<SensorDataPoint>(MAX_DATA_POINTS_FOR_CHART)
     private var statusUpdateJob: Job? = null
+    private val db by lazy { AppDatabase.getDatabase(this) }
+    private val sensorDataRepository by lazy { SensorDataRepository(db.sensorDataBatchDao()) }
 
+    // <<< CORREÇÃO 1: Implementação completa do onReceive >>>
     private val batteryDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == DataLayerListenerService.ACTION_RECEIVE_BATTERY_DATA) {
                 val level = intent.getIntExtra(DataLayerListenerService.EXTRA_BATTERY_LEVEL, -1)
                 if (level != -1) {
-                    Log.d("BatteryDebug", "2. MonitoringService: Broadcast de bateria recebido! Nível: $level")
                     currentWatchBatteryLevel = level
-                    // Envia a atualização para o servidor
                     sendWatchStatusToServer()
                 }
             }
         }
     }
 
-    // BroadcastReceiver para dados do relógio
+    // <<< CORREÇÃO 2: Tratamento de tipo para o lote de dados >>>
     private val sensorDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!isSessionActive) return
-            val dataPoint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA, SensorDataPoint::class.java)
+
+            // Pega o dado serializável do Intent
+            val serializableExtra = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_BATCH, ArrayList::class.java)
             } else {
                 @Suppress("DEPRECATION")
-                intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_DATA) as? SensorDataPoint
+                intent?.getSerializableExtra(DataLayerListenerService.EXTRA_SENSOR_BATCH)
             }
-            dataPoint?.let { processDataPoint(it) }
+
+            // Faz um cast seguro para o tipo que esperamos (ArrayList de SensorDataPoint)
+            @Suppress("UNCHECKED_CAST")
+            val batch = serializableExtra as? ArrayList<SensorDataPoint>
+
+            batch?.let {
+                if(it.isNotEmpty()) {
+                    // Agora 'it' é um ArrayList<SensorDataPoint>, que é um subtipo de List,
+                    // então a chamada para a função é segura.
+                    processDataBatch(it)
+                }
+            }
         }
     }
 
@@ -92,15 +107,108 @@ class MonitoringService : Service() {
         super.onCreate()
         Log.d(TAG, "Serviço criado.")
         createNotificationChannel()
-        val intentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_SENSOR_DATA)
-        LocalBroadcastManager.getInstance(this).registerReceiver(sensorDataReceiver, intentFilter)
-
+        // Registra o receiver para os dados do sensor
+        val sensorIntentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_SENSOR_DATA)
+        LocalBroadcastManager.getInstance(this).registerReceiver(sensorDataReceiver, sensorIntentFilter)
+        // Registra o receiver para os dados da bateria
         val batteryIntentFilter = IntentFilter(DataLayerListenerService.ACTION_RECEIVE_BATTERY_DATA)
         LocalBroadcastManager.getInstance(this).registerReceiver(batteryDataReceiver, batteryIntentFilter)
     }
 
+    private fun processDataBatch(batch: List<SensorDataPoint>) {
+        statusUpdateJob?.cancel()
+        sendStatusUpdate("Recebendo Dados...")
+
+        synchronized(dataQueue) {
+            batch.forEach { dataPoint ->
+                if (dataQueue.size >= MAX_DATA_POINTS_FOR_CHART) dataQueue.removeFirst()
+                dataQueue.addLast(dataPoint)
+            }
+            sendDataUpdate(dataQueue.toList())
+        }
+
+        serviceScope.launch {
+            val success = sendBatchDirectly(batch)
+            if (!success) {
+                Log.w(TAG, "Envio direto falhou. Salvando lote no banco para envio posterior.")
+                saveBatchAndScheduleUpload(batch)
+            }
+        }
+
+        statusUpdateJob = serviceScope.launch {
+            delay(3000L)
+            sendStatusUpdate("Pausado")
+        }
+    }
+
+    private suspend fun sendBatchDirectly(batch: List<SensorDataPoint>): Boolean {
+        if (!isSessionActive) return false
+        val patientId = currentPatientName ?: return false
+        val sessionId = currentSessionId ?: return false
+
+        return try {
+            val serverUrl = "${BuildConfig.SERVER_URL}/data"
+            val rootJsonObject = JSONObject().apply {
+                put("patientId", patientId)
+                put("sessao_id", sessionId)
+                val dataJsonArray = JSONArray()
+                batch.forEach { dp ->
+                    val dataObject = JSONObject().apply {
+                        put("timestamp", dp.timestamp)
+                        put("x", dp.values[0])
+                        put("y", dp.values[1])
+                        put("z", dp.values[2])
+                    }
+                    dataJsonArray.put(dataObject)
+                }
+                put("data", dataJsonArray)
+            }
+            val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder().url(serverUrl).post(requestBody).build()
+            networkClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Log.i(TAG, "Lote enviado com sucesso pela rota expressa.")
+                    true
+                } else {
+                    Log.w(TAG, "Falha na rota expressa: Código ${response.code}")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exceção de rede na rota expressa: ${e.message}")
+            false
+        }
+    }
+
+    private fun saveBatchAndScheduleUpload(batch: List<SensorDataPoint>) {
+        val patientId = currentPatientName ?: return
+        val sessionId = currentSessionId ?: return
+        serviceScope.launch(Dispatchers.IO) {
+            val jsonArray = JSONArray()
+            batch.forEach { dp ->
+                val dataObject = JSONObject().apply {
+                    put("timestamp", dp.timestamp)
+                    put("x", dp.values[0])
+                    put("y", dp.values[1])
+                    put("z", dp.values[2])
+                }
+                jsonArray.put(dataObject)
+            }
+            val jsonDataString = jsonArray.toString()
+            val batchToSave = SensorDataBatch(
+                sessionId = sessionId,
+                patientId = patientId,
+                jsonData = jsonDataString
+            )
+            sensorDataRepository.saveBatchForUpload(batchToSave)
+            Log.d(TAG, "Lote salvo localmente via repositório.")
+            scheduleUpload()
+        }
+    }
+
+    // --- O RESTO DO SEU CÓDIGO PERMANECE O MESMO ---
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("MonitoringService_DEBUG", "onStartCommand recebido com ação: ${intent?.action}")
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val patientName = intent.getStringExtra(EXTRA_PATIENT_NAME)
@@ -130,102 +238,65 @@ class MonitoringService : Service() {
     }
 
     private fun startMonitoring(patientName: String, sessionId: Int) {
-        if (isSessionActive) {
-            Log.w(TAG, "Tentativa de iniciar uma sessão já ativa.")
-            return
-        }
+        if (isSessionActive) return
         Log.d(TAG, "Iniciando monitoramento para $patientName, sessão $sessionId")
-
         currentPatientName = patientName
         currentSessionId = sessionId
         isSessionActive = true
-        dataBuffer.clear()
         dataQueue.clear()
-
         val notification = createNotification("Coleta de dados ativa para $patientName")
         startForeground(NOTIFICATION_ID, notification)
-
-        //connectToSocket()
         sendCommandToWatch(DataLayerConstants.START_COMMAND)
         sendSessionStateUpdate()
         sendStatusUpdate("Sessão iniciada")
     }
 
     private fun stopMonitoring() {
-
         if (!isSessionActive) return
         Log.d(TAG, "Parando monitoramento da sessão.")
-
-        // 1. Informa a UI e o sistema que a sessão não está mais ativa
+        val sessionToStop = currentSessionId
         isSessionActive = false
         sendSessionStateUpdate()
         sendStatusUpdate("Sessão finalizada, conectado.")
-
-        // 2. Para a coleta de dados no relógio e envia o buffer final
         sendCommandToWatch(DataLayerConstants.STOP_COMMAND)
-        if (dataBuffer.isNotEmpty()) {
-            sendBatchToServer(ArrayList(dataBuffer))
-            dataBuffer.clear()
-        }
 
-        // 3. Notifica o servidor que a SESSÃO parou (mas não a conexão)
         currentPatientName?.let {
             val payload = JSONObject().apply { put("patientId", it) }
             socket?.emit("session_stopped_by_client", payload)
         }
-
-        // 4. Limpa apenas o ID da sessão, mantendo o paciente selecionado
-        currentSessionId = null
-
-        // 5. Remove a notificação da barra de status, MAS MANTÉM O SERVIÇO RODANDO
-        stopForeground(false) // O 'false' é crucial aqui.
-
-    }
-    private fun processDataPoint(dataPoint: SensorDataPoint) {
-        statusUpdateJob?.cancel()
-        sendStatusUpdate("Recebendo Dados...")
-
-        synchronized(dataQueue) {
-            if (dataQueue.size >= MAX_DATA_POINTS_FOR_CHART) dataQueue.removeFirst()
-            dataQueue.addLast(dataPoint)
-            sendDataUpdate(dataQueue.toList())
-        }
-
-        synchronized(dataBuffer) {
-            dataBuffer.add(dataPoint)
-            if (dataBuffer.size >= BATCH_SIZE) {
-                sendBatchToServer(ArrayList(dataBuffer))
-                dataBuffer.clear()
+        if (sessionToStop != null) {
+            serviceScope.launch(Dispatchers.IO) {
+                sensorDataRepository.clearPendingBatchesForSession(sessionToStop)
+                WorkManager.getInstance(applicationContext).cancelUniqueWork("unique_upload_work")
             }
         }
-
-        statusUpdateJob = serviceScope.launch {
-            delay(3000L)
-            sendStatusUpdate("Pausado")
-        }
+        currentSessionId = null
+        stopForeground(false)
     }
 
-    // --- Comunicação com o Servidor (Socket.IO) ---
-    private fun connectToSocket() {
-        if (currentPatientName == null) {
-            Log.w(TAG, "Tentativa de conectar sem um nome de paciente.")
-            return
-        }
+    private fun scheduleUpload() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        val uploadWorkRequest = OneTimeWorkRequestBuilder<UploadWorker>()
+            .setConstraints(constraints)
+            .build()
+        WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+            "unique_upload_work",
+            ExistingWorkPolicy.KEEP,
+            uploadWorkRequest
+        )
+        Log.d(TAG, "Tarefa de upload agendada com WorkManager.")
+    }
 
+    private fun connectToSocket() {
+        if (currentPatientName == null) return
         try {
             val socketUrl = BuildConfig.SERVER_URL.replace("http", "ws")
-
-            // <<< CORREÇÃO AQUI >>>
-            // 1. Sempre desconecta o socket anterior, se existir.
-            // Isso garante que uma nova seleção de paciente limpe a conexão antiga.
             socket?.disconnect()
-
-            // 2. Cria uma nova instância de socket e se conecta.
-            Log.d(TAG, "Criando nova conexão de socket para o paciente: $currentPatientName")
             socket = IO.socket(socketUrl)
             setupSocketListeners()
             socket?.connect()
-
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao conectar socket: ${e.message}")
         }
@@ -246,51 +317,34 @@ class MonitoringService : Service() {
                 }
             }
         }
-
         socket?.on("start_monitoring") { args ->
             try {
                 val data = args[0] as JSONObject
                 val sessionId = data.getInt("sessao_id")
-                Log.d(TAG, "Comando 'start' recebido do servidor para a sessão: $sessionId")
-                // O serviço já sabe o nome do paciente, então só precisa do ID da sessão
-                // A função onStartCommand do serviço lida com o início real
                 val serviceIntent = Intent(this, MonitoringService::class.java).apply {
                     action = ACTION_START
                     putExtra(EXTRA_PATIENT_NAME, currentPatientName)
                     putExtra(EXTRA_SESSION_ID, sessionId)
                 }
                 ContextCompat.startForegroundService(this, serviceIntent)
-
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao processar 'start_monitoring'", e)
             }
         }
-
         socket?.on("stop_monitoring") {
-            Log.d(TAG, "Comando 'stop' recebido do servidor")
-            // Chama a própria função de parada do serviço
             stopMonitoring()
         }
-
         socket?.on(Socket.EVENT_DISCONNECT) { Log.d(TAG, "Socket desconectado.") }
-    }
-
-    private fun disconnectFromSocket() {
-        socket?.disconnect()
-        socket?.off()
     }
 
     private fun sendWatchStatusToServer() {
         val patient = currentPatientName ?: return
         val battery = currentWatchBatteryLevel ?: return
-        Log.d("BatteryDebug", "3. MonitoringService: Enviando status para o servidor (Bateria: $battery%)")
         val payload = JSONObject().apply {
             put("patientId", patient)
             put("batteryLevel", battery)
         }
         socket?.emit("watch_status_update", payload)
-        Log.d(TAG, "Enviando status do relógio para o servidor: Bateria $battery%")
-
         val intent = Intent(ACTION_WATCH_STATUS_UPDATE).apply {
             putExtra(EXTRA_BATTERY_LEVEL, battery)
         }
@@ -301,70 +355,20 @@ class MonitoringService : Service() {
         serviceScope.launch {
             try {
                 val serverUrl = "${BuildConfig.SERVER_URL}/api/start_session"
-                val jsonObject = JSONObject().apply {
-                    put("patientId", patientName)
-                }
+                val jsonObject = JSONObject().apply { put("patientId", patientName) }
                 val requestBody = jsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 val request = Request.Builder().url(serverUrl).post(requestBody).build()
-
                 networkClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        Log.d(TAG, "Requisição para iniciar sessão enviada com sucesso para o servidor.")
-                        // O servidor agora vai responder com um evento WebSocket 'start_monitoring',
-                        // que o nosso serviço já sabe como manipular. Não precisamos fazer mais nada aqui.
-                    } else {
-                        Log.e(TAG, "Falha ao requisitar início de sessão: ${response.code} ${response.message}")
-                        // Opcional: Enviar um broadcast para a UI informando o erro.
+                    if (!response.isSuccessful) {
                         sendStatusUpdate("Erro ao iniciar sessão")
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Erro de rede ao requisitar início de sessão", e)
                 sendStatusUpdate("Erro de rede")
             }
         }
     }
 
-    private fun sendBatchToServer(batch: List<SensorDataPoint>) {
-        val patientId = currentPatientName ?: return
-        val sessionId = currentSessionId ?: return
-        serviceScope.launch {
-            try {
-                val serverUrl = "${BuildConfig.SERVER_URL}/data"
-                val rootJsonObject = JSONObject().apply {
-                    put("patientId", patientId)
-                    put("sessao_id", sessionId)
-
-                    // <<< CORREÇÃO AQUI >>>
-                    // Cria um array JSON vazio
-                    val dataJsonArray = JSONArray()
-                    // Itera sobre cada ponto de dado no lote
-                    batch.forEach { dp ->
-                        // Para cada ponto, cria um objeto JSON com as chaves "x", "y", "z"
-                        val dataObject = JSONObject().apply {
-                            put("timestamp", dp.timestamp)
-                            put("x", dp.values[0])
-                            put("y", dp.values[1])
-                            put("z", dp.values[2])
-                        }
-                        // Adiciona o objeto formatado ao array
-                        dataJsonArray.put(dataObject)
-                    }
-                    put("data", dataJsonArray)
-                }
-                val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val request = Request.Builder().url(serverUrl).post(requestBody).build()
-                networkClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) Log.e(TAG, "Falha ao enviar lote: ${response.code}")
-                    else Log.d(TAG, "Lote enviado com sucesso para a sessão $sessionId")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro de rede ao enviar lote", e)
-            }
-        }
-    }
-
-    // --- Comunicação com o Relógio ---
     private fun sendCommandToWatch(command: String) {
         val nodeClient = Wearable.getNodeClient(this)
         nodeClient.connectedNodes.addOnSuccessListener { nodes ->
@@ -375,7 +379,6 @@ class MonitoringService : Service() {
         }
     }
 
-    // --- Comunicação com a UI (ViewModel) via Broadcasts ---
     private fun sendStatusUpdate(message: String) {
         val intent = Intent(ACTION_STATUS_UPDATE).apply {
             putExtra(EXTRA_STATUS_MESSAGE, message)
@@ -397,11 +400,9 @@ class MonitoringService : Service() {
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 
-    // --- Ciclo de Vida e Notificação ---
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "Serviço destruído.")
-        serviceJob.cancel() // Cancela todas as coroutines
+        serviceJob.cancel()
         LocalBroadcastManager.getInstance(this).unregisterReceiver(sensorDataReceiver)
         LocalBroadcastManager.getInstance(this).unregisterReceiver(batteryDataReceiver)
     }
@@ -421,37 +422,30 @@ class MonitoringService : Service() {
         NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Monitoramento de Tremor")
             .setContentText(contentText)
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // IMPORTANTE: Verifique se este ícone existe em res/drawable
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .build()
 
     companion object {
-
         const val ACTION_WATCH_STATUS_UPDATE = "ACTION_WATCH_STATUS_UPDATE"
         const val EXTRA_BATTERY_LEVEL = "EXTRA_BATTERY_LEVEL"
         private const val TAG = "MonitoringService"
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
-
         const val ACTION_CONNECT = "ACTION_CONNECT"
         const val ACTION_REQUEST_START_SESSION = "ACTION_REQUEST_START_SESSION"
-
         const val EXTRA_PATIENT_NAME = "EXTRA_PATIENT_NAME"
         const val EXTRA_SESSION_ID = "EXTRA_SESSION_ID"
-
         const val ACTION_STATUS_UPDATE = "ACTION_STATUS_UPDATE"
         const val EXTRA_STATUS_MESSAGE = "EXTRA_STATUS_MESSAGE"
-
         const val ACTION_SESSION_STATE_UPDATE = "ACTION_SESSION_STATE_UPDATE"
         const val EXTRA_IS_SESSION_ACTIVE = "EXTRA_IS_SESSION_ACTIVE"
-
         const val ACTION_NEW_DATA_UPDATE = "ACTION_NEW_DATA_UPDATE"
         const val EXTRA_DATA_POINTS = "EXTRA_DATA_POINTS"
-
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_CHANNEL_ID = "MonitoringChannel"
-
         private const val BATCH_SIZE = DataLayerConstants.BATCH_SIZE
         private const val MAX_DATA_POINTS_FOR_CHART = 100
     }
 }
+

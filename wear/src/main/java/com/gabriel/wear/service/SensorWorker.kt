@@ -12,6 +12,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.wear.ongoing.OngoingActivity
@@ -27,6 +28,10 @@ import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
@@ -35,20 +40,22 @@ import kotlin.coroutines.cancellation.CancellationException
 class SensorWorker(
     private val context: Context,
     params: WorkerParameters
-) : CoroutineWorker(context, params), SensorEventListener {
+) : CoroutineWorker(context, params) {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val dataClient by lazy { Wearable.getDataClient(context) }
     private val gson = Gson()
-
-    // Buffer para os dados coletados
     private val dataBuffer = mutableListOf<SensorDataPoint>()
     private val bufferMutex = Mutex()
-
-    // Controle de envio de bateria
     private var lastBatterySendTime = 0L
-    private val batterySendInterval = 30000L // 30 segundos
+    private val batterySendInterval = 30000L
+
+    // Canal para unificar as fontes de dados (real ou playback)
+    private val sensorDataChannel = Channel<SensorDataPoint>(capacity = Channel.UNLIMITED)
+
+    // Offset para cálculo de tempo real (UTC)
+    private val bootTimeOffset = System.currentTimeMillis() - SystemClock.elapsedRealtime()
 
     companion object {
         const val WORK_NAME = "SensorCollectionWork"
@@ -57,17 +64,38 @@ class SensorWorker(
         private const val BATCH_SIZE = DataLayerConstants.BATCH_SIZE
         private const val TAG = "SensorWorkerHardware"
         private const val DATA_KEY_SENSOR_BATCH = "sensor_batch_data"
+
+        // <<< LÓGICA DE PLAYBACK REINTEGRADA >>>
+        // Alterne para 'true' para usar o arquivo CSV para testes.
+        private const val USE_FAKE_DATA = false
+        // ID do recurso do arquivo de playback na pasta res/raw
+        private val PLAYBACK_FILE_ID = R.raw.simulacao_20min_6hz
     }
 
     override suspend fun doWork(): Result {
-        Log.d(TAG, "Worker com batching de hardware iniciado.")
+        Log.d(TAG, "Worker iniciado.")
         setForeground(createForegroundInfo())
-
         try {
-            // Usamos coroutineScope para garantir que as tarefas filhas sejam canceladas
-            // junto com o worker.
+            // Usa coroutineScope para garantir que ambas as tarefas (produtor/consumidor)
+            // sejam canceladas juntas.
             coroutineScope {
-                startRealSensorCollection(this)
+                // Tarefa 1: O Produtor de Dados
+                launch(Dispatchers.IO) {
+                    if (USE_FAKE_DATA) {
+                        Log.d(TAG, "Usando modo de PLAYBACK com dados do arquivo.")
+                        startFakeDataPlayback()
+                    } else {
+                        Log.d(TAG, "Usando dados REAIS do acelerômetro com BATCHING DE HARDWARE.")
+                        startRealSensorCollection()
+                    }
+                }
+
+                // Tarefa 2: O Consumidor de Dados
+                launch(Dispatchers.Default) {
+                    for (dataPoint in sensorDataChannel) {
+                        addDataToBufferAndSend(dataPoint)
+                    }
+                }
             }
         } catch (e: CancellationException) {
             Log.d(TAG, "Worker cancelado, finalizando a coleta.")
@@ -75,61 +103,88 @@ class SensorWorker(
             Log.e(TAG, "Erro crítico no Worker", e)
             return Result.failure()
         } finally {
-            // Garante que o listener seja desregistrado
-            sensorManager.unregisterListener(this)
-            Log.d(TAG, "Worker finalizado e listener do sensor desregistrado.")
+            sensorDataChannel.close()
+            Log.d(TAG, "Worker finalizado e recursos liberados.")
         }
         return Result.success()
     }
 
-    private suspend fun startRealSensorCollection(scope: CoroutineScope) {
-        Log.d(TAG, "Registrando listener do sensor com batching de hardware.")
+    private suspend fun startRealSensorCollection() {
+        // Usa callbackFlow para converter os eventos do listener em um Flow
+        callbackFlow {
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent?) {
+                    event ?: return
 
-        // Frequência de amostragem: 25Hz (40.000 microssegundos)
-        val samplingPeriodUs = 40_000
+                    // Converte o timestamp do evento (nanos desde o boot) para UTC
+                    val eventTimeMillis = event.timestamp / 1_000_000L
+                    val wallClockTime = bootTimeOffset + eventTimeMillis
 
-        // Latência máxima de relatório: 5 segundos (5.000.000 microssegundos)
-        // O sistema entregará os dados em lotes a cada 5 segundos, no máximo.
-        // A entrega pode ocorrer antes se o buffer FIFO do sensor encher.
-        val maxReportLatencyUs = 5_000_000
+                    val dataPoint = SensorDataPoint(
+                        wallClockTime, // Salva o timestamp UTC correto
+                        floatArrayOf(event.values[0], event.values[1], event.values[2])
+                    )
+                    trySend(dataPoint) // Envia o ponto de dado para o Flow
+                }
+                override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+            }
 
-        val registered = sensorManager.registerListener(
-            this,
-            accelerometer,
-            samplingPeriodUs,
-            maxReportLatencyUs
-        )
+            Log.d(TAG, "Registrando listener do sensor com batching de hardware.")
+            val samplingPeriodUs = 40_000
+            // <<< MUDANÇA PARA REDUZIR A LATÊNCIA >>>
+            // Reduzimos a latência máxima de 5 segundos para 1 segundo.
+            // Isso fará o relógio enviar os dados com muito mais frequência,
+            // melhorando a sensação de tempo real no dashboard, ao custo
+            // de um consumo um pouco maior de bateria.
+            val maxReportLatencyUs = 1_000_000 // Antes era 5_000_000
+            sensorManager.registerListener(listener, accelerometer, samplingPeriodUs, maxReportLatencyUs)
 
-        if (!registered) {
-            Log.e(TAG, "Não foi possível registrar o listener do acelerômetro.")
-            throw IllegalStateException("Falha ao registrar o sensor")
-        }
-
-        // Mantém a corrotina viva enquanto o worker estiver ativo
-        // awaitCancellation() suspende a corrotina até que ela seja cancelada.
-        awaitCancellation()
-    }
-
-    // <<< MUDANÇA CRÍTICA 1: onSensorChanged agora é o ponto central >>>
-    override fun onSensorChanged(event: SensorEvent?) {
-        event ?: return
-
-        // Criamos o dataPoint com o timestamp correto do evento
-        val dataPoint = SensorDataPoint(
-            event.timestamp, // <<< USA O TIMESTAMP DO EVENTO (nanossegundos desde o boot)
-            floatArrayOf(event.values[0], event.values[1], event.values[2])
-        )
-
-        // Precisamos lançar uma nova corrotina para não bloquear a thread do sensor
-        // e para poder usar funções 'suspend' como o Mutex e o envio de dados.
-        GlobalScope.launch(Dispatchers.Default) {
-            addDataToBufferAndSend(dataPoint)
+            // Quando o Flow é cancelado, desregistra o listener
+            awaitClose {
+                Log.d(TAG, "Cancelando listener do sensor.")
+                sensorManager.unregisterListener(listener)
+            }
+        }.collect { dataPoint ->
+            // Coleta cada ponto do Flow e envia para o canal central
+            sensorDataChannel.send(dataPoint)
         }
     }
 
-    // <<< MUDANÇA CRÍTICA 2: onAccuracyChanged é necessário ao implementar a interface >>>
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        Log.d(TAG, "Acurácia do sensor ${sensor?.name} mudou para: $accuracy")
+    private suspend fun CoroutineScope.startFakeDataPlayback() {
+        try {
+            context.resources.openRawResource(PLAYBACK_FILE_ID).bufferedReader().use { reader ->
+                reader.readLine() // Pula o cabeçalho
+                var lastTimestamp: Long? = null
+
+                for (line in reader.lineSequence()) {
+                    ensureActive() // Garante que a corrotina não foi cancelada
+
+                    val parts = line.split(',')
+                    if (parts.size == 4) {
+                        val timestamp = parts[0].toLong()
+                        val x = parts[1].toFloat()
+                        val y = parts[2].toFloat()
+                        val z = parts[3].toFloat()
+
+                        // Simula o tempo real entre as amostras do arquivo
+                        lastTimestamp?.let {
+                            val delayMs = timestamp - it
+                            if (delayMs > 0) delay(delayMs)
+                        }
+
+                        val dataPoint = SensorDataPoint(timestamp, floatArrayOf(x, y, z))
+                        sensorDataChannel.send(dataPoint)
+                        lastTimestamp = timestamp
+                    }
+                }
+            }
+            Log.d(TAG, "Playback do arquivo concluído.")
+        } catch (e: CancellationException) {
+            Log.d(TAG, "Playback de dados cancelado.")
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao ler o arquivo de playback.", e)
+        }
     }
 
     private suspend fun addDataToBufferAndSend(dataPoint: SensorDataPoint) {
@@ -137,15 +192,11 @@ class SensorWorker(
         bufferMutex.withLock {
             dataBuffer.add(dataPoint)
             if (dataBuffer.size >= BATCH_SIZE) {
-                batchToSend = ArrayList(dataBuffer) // Cria uma cópia para enviar
+                batchToSend = ArrayList(dataBuffer)
                 dataBuffer.clear()
-                Log.d(TAG, "Buffer de software atingiu o tamanho ${batchToSend?.size}. Preparando para envio.")
             }
         }
-        // Envia o lote fora do lock do mutex
-        batchToSend?.let {
-            sendDataToPhone(it)
-        }
+        batchToSend?.let { sendDataToPhone(it) }
     }
 
     private suspend fun sendDataToPhone(batch: List<SensorDataPoint>) {
@@ -161,7 +212,6 @@ class SensorWorker(
             Log.e(TAG, "Falha ao enviar lote de dados para o Data Layer", e)
         }
 
-        // Verificação para enviar o nível da bateria
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastBatterySendTime > batterySendInterval) {
             sendBatteryLevel()
@@ -170,14 +220,10 @@ class SensorWorker(
     }
 
     private suspend fun sendBatteryLevel() {
-        // (O corpo desta função permanece o mesmo do seu código original)
         val batteryIntent: Intent? = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level: Int = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale: Int = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        if (level == -1 || scale == -1) {
-            Log.e(TAG, "Não foi possível obter o nível da bateria.")
-            return
-        }
+        if (level == -1 || scale == -1) return
         val batteryPct = (level / scale.toFloat() * 100).toInt()
         try {
             val uniquePath = "${DataLayerConstants.BATTERY_PATH}/${System.currentTimeMillis()}"
@@ -192,7 +238,6 @@ class SensorWorker(
     }
 
     private fun createForegroundInfo(): ForegroundInfo {
-        // (O corpo desta função permanece o mesmo do seu código original)
         val touchIntent = Intent(context, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             context, 0, touchIntent,
@@ -211,9 +256,10 @@ class SensorWorker(
         ongoingActivity.apply(context)
         val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
-        } else {
-            0
-        }
+        } else { 0 }
         return ForegroundInfo(NOTIFICATION_ID, notificationBuilder.build(), serviceType)
     }
 }
+
+
+
