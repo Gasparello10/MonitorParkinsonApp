@@ -60,49 +60,44 @@ class SensorWorker(
         private const val TAG = "SensorWorker"
         private const val DATA_KEY_SENSOR_BATCH = "sensor_batch_data"
 
-        private const val USE_FAKE_DATA = true
-
+        // Interruptor para alternar entre dados reais e de teste
+        private const val USE_FAKE_DATA = false
+        // ID do recurso do arquivo de playback na pasta res/raw
         private val PLAYBACK_FILE_ID = R.raw.simulacao_20min_6hz
     }
 
     override suspend fun doWork(): Result {
         Log.d(TAG, "Worker iniciado.")
         setForeground(createForegroundInfo())
-        val wakeLock = (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyApp::SensorWakeLock")
+
+        // <<< WakeLock REMOVIDO: Não é mais necessário com o batching de hardware >>>
 
         try {
-            wakeLock.acquire()
-            Log.d(TAG, "WakeLock adquirido.")
-
             coroutineScope {
+                // Tarefa 1: Produtor de dados (escolhe entre real e playback)
                 launch {
                     if (USE_FAKE_DATA) {
                         Log.d(TAG, "Usando modo de PLAYBACK com dados do arquivo.")
                         startFakeDataPlayback()
                     } else {
-                        Log.d(TAG, "Usando dados REAIS do acelerômetro.")
+                        Log.d(TAG, "Usando dados REAIS do acelerômetro com BATCHING DE HARDWARE.")
                         startRealSensorCollection()
                     }
                 }
 
+                // Tarefa 2: Consumidor de dados (comum para ambos os modos)
                 launch {
                     for (dataPoint in sensorDataChannel) {
                         addDataToBuffer(dataPoint)
                     }
                 }
             }
-
         } catch (e: CancellationException) {
             Log.d(TAG, "Worker cancelado, finalizando a coleta.")
         } catch (e: Exception) {
             Log.e(TAG, "Erro crítico no Worker", e)
             return Result.failure()
         } finally {
-            if (wakeLock.isHeld) {
-                wakeLock.release()
-                Log.d(TAG, "WakeLock liberado.")
-            }
             sensorDataChannel.close()
             Log.d(TAG, "Worker finalizado e recursos liberados.")
         }
@@ -115,7 +110,7 @@ class SensorWorker(
                 override fun onSensorChanged(event: SensorEvent?) {
                     event?.let {
                         val dataPoint = SensorDataPoint(
-                            System.currentTimeMillis(),
+                            System.currentTimeMillis(), // Usamos o tempo atual para refletir quando o lote foi processado
                             floatArrayOf(it.values[0], it.values[1], it.values[2])
                         )
                         trySend(dataPoint)
@@ -123,10 +118,21 @@ class SensorWorker(
                 }
                 override fun onAccuracyChanged(s: Sensor?, a: Int) {}
             }
-            Log.d(TAG, "Registrando listener do sensor real.")
-            sensorManager.registerListener(listener, accelerometer, 40000)
+            Log.d(TAG, "Registrando listener do sensor com batching de hardware.")
+
+            // <<< ALTERAÇÃO: Configurando o batching de hardware >>>
+            val umSegundoEmMicrossegundos = 1_000_000 // 1 segundo
+            val samplingPeriodUs = 40_000 // 25Hz (1_000_000 / 25)
+
+            sensorManager.registerListener(
+                listener,
+                accelerometer,
+                samplingPeriodUs,
+                umSegundoEmMicrossegundos
+            )
+
             awaitClose {
-                Log.d(TAG, "Cancelando listener do sensor real.")
+                Log.d(TAG, "Cancelando listener do sensor.")
                 sensorManager.unregisterListener(listener)
             }
         }.collect { dataPoint ->
@@ -136,10 +142,8 @@ class SensorWorker(
 
     private suspend fun startFakeDataPlayback() = withContext(Dispatchers.IO) {
         try {
-            // <<< ALTERAÇÃO: Usa a variável PLAYBACK_FILE_ID definida acima >>>
-            val inputStream = context.resources.openRawResource(PLAYBACK_FILE_ID)
-
-            inputStream.bufferedReader().use { reader ->
+            // <<< ALTERAÇÃO: Lendo o arquivo da pasta res/raw usando o ID do recurso >>>
+            context.resources.openRawResource(PLAYBACK_FILE_ID).bufferedReader().use { reader ->
                 var lastTimestamp: Long? = null
                 reader.readLine() // Pula o cabeçalho do CSV
 
@@ -260,3 +264,4 @@ class SensorWorker(
         return ForegroundInfo(NOTIFICATION_ID, notificationBuilder.build(), serviceType)
     }
 }
+
