@@ -60,7 +60,7 @@ class SensorWorker(
         private const val TAG = "SensorWorker"
         private const val DATA_KEY_SENSOR_BATCH = "sensor_batch_data"
 
-        private const val USE_FAKE_DATA = false
+        private const val USE_FAKE_DATA = true
 
         private val PLAYBACK_FILE_ID = R.raw.simulacao_20min_6hz
     }
