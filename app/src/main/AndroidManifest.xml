@@ -39,16 +39,20 @@
             android:name=".service.MonitoringService"
             android:foregroundServiceType="dataSync" />
 
-        <!-- MUDANÇA: O intent-filter foi corrigido para ouvir MESSAGE_RECEIVED -->
         <service
             android:name=".service.DataLayerListenerService"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <data android:scheme="wear" android:host="*" android:pathPrefix="/" />
-            </intent-filter>
+            android:exported="true"
+            tools:ignore="ExportedService"> <intent-filter>
+            <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+
+            <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+
+            <data
+                android:host="*"
+                android:pathPrefix="/"
+                android:scheme="wear" />
+        </intent-filter>
         </service>
-        <!-- Fim da Mudança -->
 
     </application>
 

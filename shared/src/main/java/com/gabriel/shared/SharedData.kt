@@ -8,17 +8,14 @@ import java.io.Serializable
  */
 object DataLayerConstants {
     // Caminho para os eventos de início/parada da medição (se necessário no futuro)
+    const val BATTERY_PATH = "/battery_level"
+    const val BATTERY_KEY = "battery_level_key"
     const val CONTROL_PATH = "/control"
     const val START_COMMAND = "start"
     const val STOP_COMMAND = "stop"
-
     // Caminho para o envio dos dados do acelerômetro
     const val SENSOR_DATA_PATH = "/sensor_data"
-
-    // Chaves para os dados dentro de um DataMap
-
     const val BATCH_SIZE = 10
-
     const val KEY_TIMESTAMP = "timestamp"
 
     const val KEY_VALUES = "values" // Array de Floats (x, y, z)

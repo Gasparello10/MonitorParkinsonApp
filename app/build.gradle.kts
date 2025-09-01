@@ -22,7 +22,7 @@ android {
     buildTypes {
         debug {
             // Esta linha cria uma variável BuildConfig.SERVER_URL para a versão de debug
-            buildConfigField("String", "SERVER_URL", "\"http://10.4.10.147:5000\"")
+            buildConfigField("String", "SERVER_URL", "\"http://192.168.0.12:5000\"")
         }
         release {
             isMinifyEnabled = false
