@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    id ("kotlin-kapt")
 }
 
 android {
@@ -23,7 +22,7 @@ android {
     buildTypes {
         debug {
             // Esta linha cria uma variável BuildConfig.SERVER_URL para a versão de debug
-            buildConfigField("String", "SERVER_URL", "\"http://172.20.10.5:5000\"")
+            buildConfigField("String", "SERVER_URL", "\"http://10.4.10.165:5000\"")
         }
         release {
             isMinifyEnabled = false
@@ -51,11 +50,6 @@ android {
 }
 
 dependencies {
-    implementation ("androidx.room:room-runtime:2.6.1")
-    implementation ("androidx.room:room-ktx:2.6.1")
-    kapt ("androidx.room:room-compiler:2.6.1")
-
-    implementation ("androidx.work:work-runtime-ktx:2.9.0")
 
     implementation(project(":shared"))
     implementation (libs.androidx.localbroadcastmanager)
