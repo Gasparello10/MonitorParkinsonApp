@@ -26,6 +26,7 @@ import com.gabriel.mobile.data.local.SensorDataBatch
 import com.gabriel.mobile.worker.UploadWorker
 import com.gabriel.shared.DataLayerConstants
 import com.gabriel.shared.SensorDataPoint
+import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
 import io.socket.client.IO
@@ -43,7 +44,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
-import java.util.ArrayList
 
 class MonitoringService : Service() {
 
@@ -57,7 +57,7 @@ class MonitoringService : Service() {
     private var isSessionActive = false
     private var currentPatientName: String? = null
     private var currentSessionId: Int? = null
-
+    private val dataClient by lazy { Wearable.getDataClient(this) }
     private val dataQueue = ArrayDeque<SensorDataPoint>(MAX_DATA_POINTS_FOR_CHART)
     private var statusUpdateJob: Job? = null
     private val db by lazy { AppDatabase.getDatabase(this) }
@@ -237,6 +237,31 @@ class MonitoringService : Service() {
         return START_STICKY
     }
 
+    private fun updateSessionStateOnWatch(isActive: Boolean, sessionId: Int? = null) {
+        try {
+            val putDataMapRequest = PutDataMapRequest.create(DataLayerConstants.SESSION_STATE_PATH)
+            putDataMapRequest.dataMap.putBoolean(DataLayerConstants.SESSION_STATE_KEY_ACTIVE, isActive)
+
+            if (isActive && sessionId != null) {
+                putDataMapRequest.dataMap.putInt(DataLayerConstants.SESSION_STATE_KEY_ID, sessionId)
+            } else {
+                putDataMapRequest.dataMap.remove(DataLayerConstants.SESSION_STATE_KEY_ID)
+            }
+
+            val putDataRequest = putDataMapRequest.asPutDataRequest().setUrgent()
+
+            dataClient.putDataItem(putDataRequest).apply {
+                addOnSuccessListener {
+                    Log.d(TAG, "Estado da sessão (ativo: $isActive) enviado com sucesso para o Data Layer.")
+                }
+                addOnFailureListener { e ->
+                    Log.e(TAG, "Falha ao enviar estado da sessão para o Data Layer", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exceção ao tentar criar o DataItem de estado da sessão", e)
+        }
+    }
     private fun startMonitoring(patientName: String, sessionId: Int) {
         if (isSessionActive) return
         Log.d(TAG, "Iniciando monitoramento para $patientName, sessão $sessionId")
@@ -246,32 +271,51 @@ class MonitoringService : Service() {
         dataQueue.clear()
         val notification = createNotification("Coleta de dados ativa para $patientName")
         startForeground(NOTIFICATION_ID, notification)
-        sendCommandToWatch(DataLayerConstants.START_COMMAND)
+        updateSessionStateOnWatch(true, sessionId)
         sendSessionStateUpdate()
         sendStatusUpdate("Sessão iniciada")
     }
 
+    // DENTRO DE MonitoringService.kt
+
     private fun stopMonitoring() {
         if (!isSessionActive) return
         Log.d(TAG, "Parando monitoramento da sessão.")
-        val sessionToStop = currentSessionId
+
         isSessionActive = false
         sendSessionStateUpdate()
-        sendStatusUpdate("Sessão finalizada, conectado.")
-        sendCommandToWatch(DataLayerConstants.STOP_COMMAND)
+        // <<< MUDANÇA: Mensagem de status mais precisa >>>
+        sendStatusUpdate("Sessão finalizada. Dados pendentes serão enviados.")
 
+        // <<< MUDANÇA: Usando o DataLayer para garantir que o relógio pare >>>
+        updateSessionStateOnWatch(false)
+
+        // Notifica o servidor via socket que a sessão parou do lado do cliente
         currentPatientName?.let {
             val payload = JSONObject().apply { put("patientId", it) }
             socket?.emit("session_stopped_by_client", payload)
         }
-        if (sessionToStop != null) {
-            serviceScope.launch(Dispatchers.IO) {
-                sensorDataRepository.clearPendingBatchesForSession(sessionToStop)
-                WorkManager.getInstance(applicationContext).cancelUniqueWork("unique_upload_work")
-            }
-        }
+
+        // <<< MUDANÇA PRINCIPAL: Bloco problemático removido >>>
+        // O código que apagava os dados (`clearPendingBatchesForSession`) e
+        // cancelava o worker (`cancelUniqueWork`) foi completamente removido daqui.
+
+        // <<< MUDANÇA PRINCIPAL: Adicionado agendamento final >>>
+        // Em vez de limpar, agora garantimos que um último upload seja agendado.
+        // Isso age como um comando "flush" para enviar tudo o que falta.
+        Log.d(TAG, "Agendando um envio final para garantir que todos os lotes salvos sejam processados.")
+        scheduleUpload()
+
         currentSessionId = null
-        stopForeground(false)
+
+        // <<< MUDANÇA: Usar STOP_FOREGROUND_DETACH para a notificação sumir imediatamente >>>
+        // Nota: Você pode precisar importar `Service.STOP_FOREGROUND_DETACH`
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(Service.STOP_FOREGROUND_DETACH)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(false)
+        }
     }
 
     private fun scheduleUpload() {

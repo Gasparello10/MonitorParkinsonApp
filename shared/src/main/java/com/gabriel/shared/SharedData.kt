@@ -22,6 +22,9 @@ object DataLayerConstants {
 
     // Caminho para as mensagens de "ping" do celular para o relógio
     const val PING_PATH = "/ping"
+    const val SESSION_STATE_PATH = "/session/state"
+    const val SESSION_STATE_KEY_ACTIVE = "session_active"
+    const val SESSION_STATE_KEY_ID = "session_id"
 }
 
 /**
