@@ -19,41 +19,49 @@ class UploadWorker(appContext: Context, workerParams: WorkerParameters) :
     private val networkClient = OkHttpClient()
 
     override suspend fun doWork(): Result {
-        // Pega o lote mais antigo que ainda não foi enviado
-        val pendingBatch = batchDao.getOldestPendingBatch()
-            ?: return Result.success().also {
-                Log.d("UploadWorker", "Nenhum lote pendente encontrado. Trabalho concluído.")
-            }
 
-        Log.d("UploadWorker", "Encontrado lote pendente (id: ${pendingBatch.id}). Tentando enviar...")
-
-        return try {
-            val serverUrl = "${BuildConfig.SERVER_URL}/data"
-
-            val rootJsonObject = JSONObject().apply {
-                put("patientId", pendingBatch.patientId)
-                put("sessao_id", pendingBatch.sessionId)
-                // O jsonData já é uma string de array JSON, então podemos usá-la para construir um JSONArray
-                put("data", org.json.JSONArray(pendingBatch.jsonData))
-            }
-
-            val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder().url(serverUrl).post(requestBody).build()
-
-            networkClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.i("UploadWorker", "Lote ${pendingBatch.id} enviado com sucesso! Deletando do banco local.")
-                    // Deleta o lote do banco de dados APENAS se o envio for bem-sucedido
-                    batchDao.deleteBatch(pendingBatch)
-                    Result.success()
-                } else {
-                    Log.w("UploadWorker", "Falha no envio do lote ${pendingBatch.id}: ${response.code}. Tentando novamente mais tarde.")
-                    Result.retry() // Informa ao WorkManager para tentar de novo mais tarde
+        // <<< MUDANÇA 1: Adicionado um loop para processar todos os lotes em sequência >>>
+        while (true) {
+            // Pega o lote mais antigo que ainda não foi enviado
+            val pendingBatch = batchDao.getOldestPendingBatch()
+                ?: return Result.success().also {
+                    // Se não há mais lotes, o trabalho termina com sucesso.
+                    Log.d("UploadWorker", "Nenhum lote pendente encontrado. Trabalho concluído.")
                 }
+
+            Log.d("UploadWorker", "Encontrado lote pendente (id: ${pendingBatch.id}). Tentando enviar...")
+
+            try {
+                val serverUrl = "${BuildConfig.SERVER_URL}/data"
+
+                val rootJsonObject = JSONObject().apply {
+                    put("patientId", pendingBatch.patientId)
+                    put("sessao_id", pendingBatch.sessionId)
+                    put("data", org.json.JSONArray(pendingBatch.jsonData))
+                }
+
+                val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = Request.Builder().url(serverUrl).post(requestBody).build()
+
+                networkClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.i("UploadWorker", "Lote ${pendingBatch.id} enviado com sucesso! Deletando do banco local.")
+                        batchDao.deleteBatch(pendingBatch)
+
+                        // <<< MUDANÇA 2: A linha "Result.success()" foi REMOVIDA daqui >>>
+                        // Em vez de terminar, o loop continua para o próximo lote.
+
+                    } else {
+                        Log.w("UploadWorker", "Falha no envio do lote ${pendingBatch.id}: ${response.code}. Tentando novamente mais tarde.")
+                        // Se o servidor deu erro, paramos e pedimos para o WorkManager tentar de novo mais tarde.
+                        return Result.retry()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("UploadWorker", "Erro de rede/exceção ao enviar o lote ${pendingBatch.id}.", e)
+                // Se a rede caiu ou deu outro erro, paramos e pedimos para tentar de novo.
+                return Result.retry()
             }
-        } catch (e: Exception) {
-            Log.e("UploadWorker", "Erro de rede/exceção ao enviar o lote ${pendingBatch.id}.", e)
-            Result.retry() // Tenta novamente em caso de falha de conexão
-        }
+        } // Fim do loop
     }
 }

@@ -283,7 +283,7 @@ class MonitoringService : Service() {
             .build()
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
             "unique_upload_work",
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             uploadWorkRequest
         )
         Log.d(TAG, "Tarefa de upload agendada com WorkManager.")
