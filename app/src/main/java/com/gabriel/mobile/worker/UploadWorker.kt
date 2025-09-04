@@ -10,6 +10,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 class UploadWorker(appContext: Context, workerParams: WorkerParameters) :
@@ -18,51 +19,83 @@ class UploadWorker(appContext: Context, workerParams: WorkerParameters) :
     private val batchDao = AppDatabase.getDatabase(appContext).sensorDataBatchDao()
     private val networkClient = OkHttpClient()
 
+    // Define quantos lotes do banco de dados tentaremos enviar de uma só vez
+    private val BATCH_UPLOAD_SIZE = 20
+
     override suspend fun doWork(): Result {
-
-        // <<< MUDANÇA 1: Adicionado um loop para processar todos os lotes em sequência >>>
         while (true) {
-            // Pega o lote mais antigo que ainda não foi enviado
-            val pendingBatch = batchDao.getOldestPendingBatch()
-                ?: return Result.success().also {
-                    // Se não há mais lotes, o trabalho termina com sucesso.
-                    Log.d("UploadWorker", "Nenhum lote pendente encontrado. Trabalho concluído.")
-                }
+            // Pega um conjunto de lotes pendentes, até o limite definido
+            val pendingBatches = batchDao.getOldestPendingBatches(BATCH_UPLOAD_SIZE)
 
-            Log.d("UploadWorker", "Encontrado lote pendente (id: ${pendingBatch.id}). Tentando enviar...")
-
-            try {
-                val serverUrl = "${BuildConfig.SERVER_URL}/data"
-
-                val rootJsonObject = JSONObject().apply {
-                    put("patientId", pendingBatch.patientId)
-                    put("sessao_id", pendingBatch.sessionId)
-                    put("data", org.json.JSONArray(pendingBatch.jsonData))
-                }
-
-                val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val request = Request.Builder().url(serverUrl).post(requestBody).build()
-
-                networkClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        Log.i("UploadWorker", "Lote ${pendingBatch.id} enviado com sucesso! Deletando do banco local.")
-                        batchDao.deleteBatch(pendingBatch)
-
-                        // <<< MUDANÇA 2: A linha "Result.success()" foi REMOVIDA daqui >>>
-                        // Em vez de terminar, o loop continua para o próximo lote.
-
-                    } else {
-                        Log.w("UploadWorker", "Falha no envio do lote ${pendingBatch.id}: ${response.code}. Tentando novamente mais tarde.")
-                        // Se o servidor deu erro, paramos e pedimos para o WorkManager tentar de novo mais tarde.
-                        return Result.retry()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("UploadWorker", "Erro de rede/exceção ao enviar o lote ${pendingBatch.id}.", e)
-                // Se a rede caiu ou deu outro erro, paramos e pedimos para tentar de novo.
-                return Result.retry()
+            if (pendingBatches.isEmpty()) {
+                Log.d("UploadWorker", "Nenhum lote pendente encontrado. Trabalho concluído.")
+                return Result.success()
             }
-        } // Fim do loop
+
+            // Agrupa os dados por sessão para enviar uma requisição por sessão
+            val batchesBySession = pendingBatches.groupBy { it.sessionId }
+
+            // Itera sobre cada sessão que tem dados pendentes
+            for ((sessionId, batchesForSession) in batchesBySession) {
+
+                val patientId = batchesForSession.firstOrNull()?.patientId ?: continue
+
+                Log.d("UploadWorker", "Agrupando ${batchesForSession.size} lotes para a sessão $sessionId. Tentando enviar...")
+
+                try {
+                    val serverUrl = "${BuildConfig.SERVER_URL}/data"
+
+                    // Combina todos os dados JSON de múltiplos lotes em um único JSONArray
+                    val combinedJsonData = JSONArray()
+                    batchesForSession.forEach { batch ->
+                        try {
+                            val batchJsonArray = JSONArray(batch.jsonData)
+                            for (i in 0 until batchJsonArray.length()) {
+                                combinedJsonData.put(batchJsonArray.getJSONObject(i))
+                            }
+                        } catch (e: Exception) {
+                            Log.e("UploadWorker", "Erro ao parsear o JSON do lote ${batch.id}, pulando este lote.", e)
+                        }
+                    }
+
+                    // Se todos os lotes de um grupo estiverem corrompidos, deleta e continua
+                    if (combinedJsonData.length() == 0) {
+                        Log.w("UploadWorker", "Nenhum dado válido para enviar para a sessão $sessionId após parse. Deletando lotes corrompidos.")
+                        batchDao.deleteBatches(batchesForSession)
+                        continue // Pula para o próximo grupo de sessão
+                    }
+
+                    val rootJsonObject = JSONObject().apply {
+                        put("patientId", patientId)
+                        put("sessao_id", sessionId)
+                        put("data", combinedJsonData)
+                    }
+
+                    val requestBody = rootJsonObject.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                    val request = Request.Builder().url(serverUrl).post(requestBody).build()
+
+                    networkClient.newCall(request).execute().use { response ->
+                        when {
+                            response.isSuccessful -> {
+                                Log.i("UploadWorker", "${batchesForSession.size} lotes da sessão $sessionId enviados com sucesso! Deletando do banco local.")
+                                batchDao.deleteBatches(batchesForSession)
+                            }
+                            response.code in 400..499 -> {
+                                Log.e("UploadWorker", "Erro do cliente (${response.code}) ao enviar o grupo de lotes para a sessão $sessionId. Os dados são inválidos ou a sessão não existe mais. Deletando lotes locais.")
+                                batchDao.deleteBatches(batchesForSession)
+                            }
+                            else -> {
+                                Log.w("UploadWorker", "Falha no envio do grupo de lotes para a sessão $sessionId: ${response.code}. Tentando novamente mais tarde.")
+                                return Result.retry()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("UploadWorker", "Erro de rede/exceção ao enviar o grupo de lotes para a sessão $sessionId.", e)
+                    return Result.retry()
+                }
+            } // Fim do loop de sessões
+        } // Fim do loop principal (while true)
     }
 }
 

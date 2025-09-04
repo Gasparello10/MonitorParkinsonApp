@@ -17,13 +17,18 @@ interface SensorDataBatchDao {
     @Query("SELECT * FROM pending_batches ORDER BY createdAt ASC LIMIT 1")
     suspend fun getOldestPendingBatch(): SensorDataBatch?
 
+    // <<< ALTERAÇÃO: Nova função para buscar múltiplos lotes de uma vez >>>
+    @Query("SELECT * FROM pending_batches ORDER BY createdAt ASC LIMIT :limit")
+    suspend fun getOldestPendingBatches(limit: Int): List<SensorDataBatch>
+
     @Delete
     suspend fun deleteBatch(batch: SensorDataBatch)
 
-    /**
-     * <<< NOVO: Deleta todos os lotes pendentes associados a uma sessão específica. >>>
-     * Isso é crucial para limpar o backlog quando uma sessão é interrompida.
-     */
+    // <<< ALTERAÇÃO: Nova função para deletar múltiplos lotes de uma vez >>>
+    @Delete
+    suspend fun deleteBatches(batches: List<SensorDataBatch>)
+
     @Query("DELETE FROM pending_batches WHERE sessionId = :sessionId")
     suspend fun deleteBatchesBySessionId(sessionId: Int)
 }
+
