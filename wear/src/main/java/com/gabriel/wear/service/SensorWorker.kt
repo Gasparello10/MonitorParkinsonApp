@@ -13,6 +13,7 @@ import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.wear.ongoing.OngoingActivity
@@ -45,26 +46,35 @@ class SensorWorker(
     private val dataBuffer = mutableListOf<SensorDataPoint>()
     private val bufferMutex = Mutex()
     private var lastBatterySendTime = 0L
-    private val batterySendInterval = 30000L // 30 segundos
+    private val batterySendInterval = 30000L
+
+    // Armazena a diferença entre o tempo de boot e o tempo real (wall-clock)
+    private var timestampOffset: Long = 0L
 
     companion object {
         const val WORK_NAME = "SensorCollectionWork"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_CHANNEL_ID = "SensorServiceChannel"
         private const val BATCH_SIZE = DataLayerConstants.BATCH_SIZE
-        private const val TAG = "SensorWorkerHardware"
+        private const val TAG = "SensorWorker" // TAG unificada
         private const val DATA_KEY_SENSOR_BATCH = "sensor_batch_data"
     }
 
     override suspend fun doWork(): Result {
-        Log.d(TAG, "Worker com batching de hardware iniciado.")
+        Log.d(TAG, "Worker iniciado.")
         setForeground(createForegroundInfo())
         try {
             coroutineScope {
+                // Calcula o offset de tempo antes de iniciar a coleta
+                calculateTimestampOffset()
                 startRealSensorCollection()
             }
         } catch (e: CancellationException) {
-            Log.d(TAG, "Worker cancelado, finalizando a coleta.")
+            Log.d(TAG, "Worker cancelado, enviando dados restantes.")
+            // Garante que o buffer final seja enviado mesmo se o worker for cancelado
+            withContext(NonCancellable) {
+                flushDataBuffer()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Erro crítico no Worker", e)
             return Result.failure()
@@ -73,6 +83,14 @@ class SensorWorker(
             Log.d(TAG, "Worker finalizado e listener do sensor desregistrado.")
         }
         return Result.success()
+    }
+
+    private fun calculateTimestampOffset() {
+        val currentTimeMillis = System.currentTimeMillis()
+        val elapsedRealtimeMillis = SystemClock.elapsedRealtime()
+        // O offset é a diferença que converte o "tempo desde o boot" para "tempo real"
+        timestampOffset = currentTimeMillis - elapsedRealtimeMillis
+        Log.d(TAG, "Offset de tempo calculado: $timestampOffset")
     }
 
     private suspend fun startRealSensorCollection() {
@@ -89,11 +107,17 @@ class SensorWorker(
 
     override fun onSensorChanged(event: SensorEvent?) {
         event ?: return
+
+        // Converte o timestamp do evento (nanossegundos desde o boot) para milissegundos
+        val eventTimeMillis = event.timestamp / 1_000_000
+        // Aplica o offset para obter o timestamp Unix (tempo real UTC)
+        val correctedTimestamp = eventTimeMillis + timestampOffset
+
         val dataPoint = SensorDataPoint(
-            event.timestamp,
+            correctedTimestamp, // Usa o timestamp absoluto e corrigido
             floatArrayOf(event.values[0], event.values[1], event.values[2])
         )
-        // Usamos o CoroutineScope do Worker para lançar a tarefa
+
         CoroutineScope(Dispatchers.Default).launch {
             addDataToBufferAndSend(dataPoint)
         }
@@ -118,30 +142,22 @@ class SensorWorker(
         }
     }
 
-    // <<< MUDANÇA 1: Função helper `withWakeLock` foi criada >>>
-    /**
-     * Adquire um WakeLock temporário, executa um bloco de código, e garante
-     * que o WakeLock seja liberado no final, mesmo que ocorra um erro.
-     */
-    private suspend fun <T> withWakeLock(block: suspend () -> T): T {
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SensorWorker::DataSendWakeLock")
-        try {
-            // Adquire o lock com um timeout de 1 minuto como segurança.
-            wakeLock.acquire(1 * 60 * 1000L)
-            Log.d(TAG, "WakeLock adquirido para envio de dados.")
-            return block()
-        } finally {
-            if (wakeLock.isHeld) {
-                wakeLock.release()
-                Log.d(TAG, "WakeLock liberado.")
+    private suspend fun flushDataBuffer() {
+        var finalBatch: List<SensorDataPoint>? = null
+        bufferMutex.withLock {
+            if (dataBuffer.isNotEmpty()) {
+                finalBatch = ArrayList(dataBuffer)
+                dataBuffer.clear()
             }
+        }
+        finalBatch?.let {
+            Log.d(TAG, "Enviando lote final de ${it.size} amostras.")
+            sendDataToPhone(it)
         }
     }
 
-    // <<< MUDANÇA 2: A lógica de envio agora usa a função `withWakeLock` >>>
     private suspend fun sendDataToPhone(batch: List<SensorDataPoint>) {
-        withWakeLock { // O código aqui dentro é executado com a garantia do WakeLock
+        withWakeLock {
             val serializedBatch = gson.toJson(batch)
             try {
                 val uniquePath = "${DataLayerConstants.SENSOR_DATA_PATH}/${System.currentTimeMillis()}"
@@ -149,7 +165,7 @@ class SensorWorker(
                 putDataMapRequest.dataMap.putString(DATA_KEY_SENSOR_BATCH, serializedBatch)
                 val putDataRequest = putDataMapRequest.asPutDataRequest().setUrgent()
                 dataClient.putDataItem(putDataRequest).await()
-                Log.d(TAG, "Lote de ${batch.size} amostras enviado para o celular com sucesso.")
+                Log.d(TAG, "Lote de ${batch.size} amostras enviado para o celular.")
             } catch (e: Exception) {
                 Log.e(TAG, "Falha ao enviar lote de dados para o Data Layer", e)
             }
@@ -181,7 +197,23 @@ class SensorWorker(
         }
     }
 
+    private suspend fun <T> withWakeLock(block: suspend () -> T): T {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SensorWorker::DataSendWakeLock")
+        try {
+            wakeLock.acquire(1 * 60 * 1000L)
+            Log.d(TAG, "WakeLock adquirido para envio de dados.")
+            return block()
+        } finally {
+            if (wakeLock.isHeld) {
+                wakeLock.release()
+                Log.d(TAG, "WakeLock liberado.")
+            }
+        }
+    }
+
     private fun createForegroundInfo(): ForegroundInfo {
+
         val touchIntent = Intent(context, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             context, 0, touchIntent,

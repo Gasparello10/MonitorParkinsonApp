@@ -22,6 +22,7 @@ import com.gabriel.mobile.BuildConfig
 import com.gabriel.mobile.R
 import com.gabriel.mobile.data.SensorDataRepository
 import com.gabriel.mobile.data.local.AppDatabase
+import com.gabriel.mobile.data.local.BatteryReading
 import com.gabriel.mobile.data.local.SensorDataBatch
 import com.gabriel.mobile.worker.UploadWorker
 import com.gabriel.shared.DataLayerConstants
@@ -44,6 +45,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import kotlin.text.insert
 
 class MonitoringService : Service() {
 
@@ -64,17 +66,37 @@ class MonitoringService : Service() {
     private val sensorDataRepository by lazy { SensorDataRepository(db.sensorDataBatchDao()) }
 
     // <<< CORREÇÃO 1: Implementação completa do onReceive >>>
+
+
     private val batteryDataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == DataLayerListenerService.ACTION_RECEIVE_BATTERY_DATA) {
                 val level = intent.getIntExtra(DataLayerListenerService.EXTRA_BATTERY_LEVEL, -1)
                 if (level != -1) {
                     currentWatchBatteryLevel = level
+
+                    // 1. Envia o status em tempo real (como antes)
                     sendWatchStatusToServer()
+
+                    // 2. SALVA A LEITURA NO BANCO DE DADOS LOCAL
+                    val sessionId = currentSessionId
+                    if (sessionId != null) {
+                        serviceScope.launch(Dispatchers.IO) {
+                            // A classe BatteryReading foi criada no Passo 1
+                            val batteryReading = BatteryReading(
+                                sessionId = sessionId,
+                                batteryLevel = level
+                            )
+                            // A função insert() foi criada no Passo 2 e adicionada ao AppDatabase no Passo 3
+                            db.batteryReadingDao().insert(batteryReading)
+                            Log.d(TAG, "Leitura da bateria ($level%) salva no banco de dados local para a sessão $sessionId.")
+                        }
+                    }
                 }
             }
         }
     }
+
 
     // <<< CORREÇÃO 2: Tratamento de tipo para o lote de dados >>>
     private val sensorDataReceiver = object : BroadcastReceiver() {

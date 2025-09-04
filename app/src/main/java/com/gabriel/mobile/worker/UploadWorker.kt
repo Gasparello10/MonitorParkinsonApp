@@ -65,3 +65,4 @@ class UploadWorker(appContext: Context, workerParams: WorkerParameters) :
         } // Fim do loop
     }
 }
+
